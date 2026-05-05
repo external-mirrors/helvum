@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use adw::{glib, prelude::*, subclass::prelude::*};
-use pipewire::spa::format::MediaType;
+use libspa::param::format::MediaType;
 
 use super::Port;
 
@@ -24,7 +24,7 @@ mod imp {
 
     use std::cell::Cell;
 
-    use once_cell::sync::Lazy;
+    use std::sync::LazyLock;
 
     pub struct Link {
         pub output_port: glib::WeakRef<Port>,
@@ -53,7 +53,7 @@ mod imp {
 
     impl ObjectImpl for Link {
         fn properties() -> &'static [glib::ParamSpec] {
-            static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
+            static PROPERTIES: LazyLock<Vec<glib::ParamSpec>> = LazyLock::new(|| {
                 vec![
                     glib::ParamSpecObject::builder::<Port>("output-port")
                         .flags(glib::ParamFlags::READWRITE)

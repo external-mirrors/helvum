@@ -61,7 +61,7 @@ mod imp {
 
 glib::wrapper! {
     pub struct PortHandle(ObjectSubclass<imp::PortHandle>)
-        @extends gtk::Widget;
+        @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl PortHandle {

@@ -1,11 +1,11 @@
 {
     "id": "org.pipewire.Helvum",
     "runtime": "org.gnome.Platform",
-    "runtime-version": "45",
+    "runtime-version": "50",
     "sdk": "org.gnome.Sdk",
     "sdk-extensions": [
         "org.freedesktop.Sdk.Extension.rust-stable",
-        "org.freedesktop.Sdk.Extension.llvm16"
+        "org.freedesktop.Sdk.Extension.llvm22"
     ],
     "command": "helvum",
     "finish-args": [
@@ -13,11 +13,12 @@
         "--socket=wayland",
         "--device=dri",
         "--share=ipc",
-        "--filesystem=xdg-run/pipewire-0"
+        "--filesystem=xdg-run/pipewire-0",
+        "--filesystem=host"
     ],
     "build-options": {
-        "append-path": "/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm16/bin",
-        "prepend-ld-library-path": "/usr/lib/sdk/llvm16/lib",
+        "append-path": "/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm22/bin",
+        "prepend-ld-library-path": "/usr/lib/sdk/llvm22/lib",
         "build-args": [
             "--share=network"
         ]

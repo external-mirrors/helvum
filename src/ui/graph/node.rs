@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use adw::{glib, gtk, prelude::*, subclass::prelude::*};
-use pipewire::spa::Direction;
+use libspa::utils::Direction;
 
 use super::Port;
 
@@ -149,7 +149,7 @@ mod imp {
 
 glib::wrapper! {
     pub struct Node(ObjectSubclass<imp::Node>)
-        @extends gtk::Widget;
+        @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl Node {

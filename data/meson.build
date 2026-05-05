@@ -11,10 +11,11 @@ desktop_file = configure_file(
 if desktop_file_validate.found()
   test(
     'validate-desktop',
-    desktop_file_validate,
+    sh,
     args: [
-      desktop_file
-    ],
+      '-c',
+      'desktop-file-validate data/' + base_id + '.desktop'
+    ]
   )
 endif
 
@@ -36,10 +37,11 @@ appdata_file = configure_file(
 if appstream_util.found()
   test(
     'validate-appdata',
-    appstream_util,
+    sh,
     args: [
-      'validate', '--nonet', appdata_file
-    ],
+      '-c',
+      'appstream-util validate --nonet data/' + base_id + '.metainfo.xml'
+    ]
   )
 endif
 

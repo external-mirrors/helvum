@@ -23,20 +23,18 @@ use crate::{ui::graph::GraphView, GtkMessage, PipewireMessage};
 mod imp {
     use super::*;
 
-    use std::{cell::RefCell, collections::HashMap};
-
-    use once_cell::unsync::OnceCell;
+    use std::{cell::OnceCell, cell::RefCell, collections::HashMap};
 
     use crate::{ui::graph, MediaType, NodeType};
 
     #[derive(Default, glib::Properties)]
     #[properties(wrapper_type = super::GraphManager)]
     pub struct GraphManager {
-        #[property(get, set, construct_only)]
-        pub graph: OnceCell<crate::ui::graph::GraphView>,
+        #[property(get, set, construct_only, nullable)]
+        pub graph: RefCell<Option<crate::ui::graph::GraphView>>,
 
-        #[property(get, set, construct_only)]
-        pub connection_banner: OnceCell<adw::Banner>,
+        #[property(get, set, construct_only, nullable)]
+        pub connection_banner: RefCell<Option<adw::Banner>>,
 
         pub pw_sender: OnceCell<PwSender<crate::GtkMessage>>,
         pub items: RefCell<HashMap<u32, glib::Object>>,
@@ -53,36 +51,69 @@ mod imp {
     impl ObjectImpl for GraphManager {}
 
     impl GraphManager {
-        pub fn attach_receiver(&self, receiver: glib::Receiver<crate::PipewireMessage>) {
-            receiver.attach(None, glib::clone!(
-                @weak self as imp => @default-return glib::ControlFlow::Continue,
-                move |msg| {
+        pub fn attach_receiver(&self, receiver: async_channel::Receiver<crate::PipewireMessage>) {
+            let obj = self.obj().clone();
+            glib::MainContext::default().spawn_local(async move {
+                while let Ok(msg) = receiver.recv().await {
+                    let imp = obj.imp();
                     match msg {
-                        PipewireMessage::NodeAdded { id, name, node_type } => imp.add_node(id, name.as_str(), node_type),
-                        PipewireMessage::NodeNameChanged { id, name, media_name } => imp.node_name_changed(id, &name, &media_name),
-                        PipewireMessage::PortAdded { id, node_id, name, direction } => imp.add_port(id, name.as_str(), node_id, direction),
-                        PipewireMessage::PortFormatChanged { id, media_type } => imp.port_media_type_changed(id, media_type),
+                        PipewireMessage::NodeAdded {
+                            id,
+                            name,
+                            node_type,
+                        } => imp.add_node(id, name.as_str(), node_type),
+                        PipewireMessage::NodeNameChanged {
+                            id,
+                            name,
+                            media_name,
+                        } => imp.node_name_changed(id, &name, &media_name),
+                        PipewireMessage::PortAdded {
+                            id,
+                            node_id,
+                            name,
+                            direction,
+                        } => imp.add_port(id, name.as_str(), node_id, direction),
+                        PipewireMessage::PortFormatChanged { id, media_type } => {
+                            imp.port_media_type_changed(id, media_type)
+                        }
                         PipewireMessage::LinkAdded {
-                            id, port_from, port_to, active, media_type
+                            id,
+                            port_from,
+                            port_to,
+                            active,
+                            media_type,
                         } => imp.add_link(id, port_from, port_to, active, media_type),
-                        PipewireMessage::LinkStateChanged { id, active } => imp.link_state_changed(id, active),
-                        PipewireMessage::LinkFormatChanged { id, media_type } => imp.link_format_changed(id, media_type),
+                        PipewireMessage::LinkStateChanged { id, active } => {
+                            imp.link_state_changed(id, active)
+                        }
+                        PipewireMessage::LinkFormatChanged { id, media_type } => {
+                            imp.link_format_changed(id, media_type)
+                        }
                         PipewireMessage::NodeRemoved { id } => imp.remove_node(id),
-                        PipewireMessage::PortRemoved { id, node_id } => imp.remove_port(id, node_id),
+                        PipewireMessage::PortRemoved { id, node_id } => {
+                            imp.remove_port(id, node_id)
+                        }
                         PipewireMessage::LinkRemoved { id } => imp.remove_link(id),
                         PipewireMessage::Connecting => {
-                            imp.obj().connection_banner().set_revealed(true);
+                            if let Some(banner) = imp.connection_banner.borrow().as_ref() {
+                                banner.set_revealed(true);
+                            }
                         }
                         PipewireMessage::Connected => {
-                            imp.obj().connection_banner().set_revealed(false);
-                        },
+                            if let Some(banner) = imp.connection_banner.borrow().as_ref() {
+                                banner.set_revealed(false);
+                            }
+                        }
                         PipewireMessage::Disconnected => {
                             imp.clear();
-                        },
-                    };
-                    glib::ControlFlow::Continue
+                        }
+                    }
                 }
-            ));
+            });
+        }
+
+        fn graph_view(&self) -> crate::ui::graph::GraphView {
+            self.graph.borrow().clone().expect("graph should be set")
         }
 
         /// Add a new node to the view.
@@ -93,7 +124,7 @@ mod imp {
 
             self.items.borrow_mut().insert(id, node.clone().upcast());
 
-            self.obj().graph().add_node(node, node_type);
+            self.graph_view().add_node(node, node_type);
         }
 
         /// Update a node tooltip to the view.
@@ -126,11 +157,11 @@ mod imp {
                 return;
             };
 
-            self.obj().graph().remove_node(&node);
+            self.graph_view().remove_node(&node);
         }
 
         /// Add a new port to the view.
-        fn add_port(&self, id: u32, name: &str, node_id: u32, direction: pipewire::spa::Direction) {
+        fn add_port(&self, id: u32, name: &str, node_id: u32, direction: libspa::utils::Direction) {
             log::info!("Adding port to graph: id {}", id);
 
             let mut items = self.items.borrow_mut();
@@ -150,15 +181,20 @@ mod imp {
             port.connect_local(
                 "port_toggled",
                 false,
-                glib::clone!(@weak self as app => @default-return None, move |args| {
-                    // Args always look like this: &[widget, id_port_from, id_port_to]
-                    let port_from = args[1].get::<u32>().unwrap();
-                    let port_to = args[2].get::<u32>().unwrap();
+                glib::clone!(
+                    #[weak(rename_to = app)]
+                    self,
+                    #[upgrade_or_default]
+                    move |args| {
+                        // Args always look like this: &[widget, id_port_from, id_port_to]
+                        let port_from = args[1].get::<u32>().unwrap();
+                        let port_to = args[2].get::<u32>().unwrap();
 
-                    app.toggle_link(port_from, port_to);
+                        app.toggle_link(port_from, port_to);
 
-                    None
-                }),
+                        None
+                    }
+                ),
             );
 
             items.insert(id, port.clone().upcast());
@@ -248,7 +284,8 @@ mod imp {
 
             // Update graph to contain the new link.
             self.graph
-                .get()
+                .borrow()
+                .as_ref()
                 .expect("graph should be set")
                 .add_link(link);
         }
@@ -273,7 +310,7 @@ mod imp {
             link.set_active(active);
         }
 
-        fn link_format_changed(&self, id: u32, media_type: pipewire::spa::format::MediaType) {
+        fn link_format_changed(&self, id: u32, media_type: libspa::param::format::MediaType) {
             let items = self.items.borrow();
 
             let Some(link) = items.get(&id) else {
@@ -308,12 +345,12 @@ mod imp {
                 return;
             };
 
-            self.obj().graph().remove_link(&link);
+            self.graph_view().remove_link(&link);
         }
 
         fn clear(&self) {
             self.items.borrow_mut().clear();
-            self.obj().graph().clear();
+            self.graph_view().clear();
         }
     }
 }
@@ -327,7 +364,7 @@ impl GraphManager {
         graph: &GraphView,
         connection_banner: &adw::Banner,
         sender: PwSender<GtkMessage>,
-        receiver: glib::Receiver<PipewireMessage>,
+        receiver: async_channel::Receiver<PipewireMessage>,
     ) -> Self {
         let res: Self = glib::Object::builder()
             .property("graph", graph)

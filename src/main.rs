@@ -20,7 +20,7 @@ mod pipewire_connection;
 mod ui;
 
 use adw::{gtk, prelude::*};
-use pipewire::spa::{format::MediaType, Direction};
+use libspa::{param::format::MediaType, utils::Direction};
 
 /// Messages sent by the GTK thread to notify the pipewire thread.
 #[derive(Debug, Clone)]
@@ -120,7 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start the pipewire thread with channels in both directions.
 
-    let (gtk_sender, gtk_receiver) = glib::MainContext::channel(glib::Priority::DEFAULT);
+    let (gtk_sender, gtk_receiver) = async_channel::bounded::<PipewireMessage>(64);
     let (pw_sender, pw_receiver) = pipewire::channel::channel();
     let pw_thread =
         std::thread::spawn(move || pipewire_connection::thread_main(gtk_sender, pw_receiver));

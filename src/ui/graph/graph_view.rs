@@ -40,10 +40,10 @@ mod imp {
     use std::collections::{HashMap, HashSet};
 
     use adw::gtk::gdk::{self};
+    use libspa::param::format::MediaType;
+    use libspa::utils::Direction;
     use log::warn;
-    use once_cell::sync::Lazy;
-    use pipewire::spa::format::MediaType;
-    use pipewire::spa::Direction;
+    use std::sync::LazyLock;
 
     pub struct Colors {
         audio: gdk::RGBA,
@@ -151,7 +151,7 @@ mod imp {
         }
 
         fn properties() -> &'static [glib::ParamSpec] {
-            static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
+            static PROPERTIES: LazyLock<Vec<glib::ParamSpec>> = LazyLock::new(|| {
                 vec![
                     glib::ParamSpecOverride::for_interface::<gtk::Scrollable>("hadjustment"),
                     glib::ParamSpecOverride::for_interface::<gtk::Scrollable>("vadjustment"),
@@ -228,14 +228,25 @@ mod imp {
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let widget = &*self.obj();
-            let alloc = widget.allocation();
+            let (width, height) = (widget.width(), widget.height());
 
             // Draw all visible children
             self.nodes
                 .borrow()
                 .iter()
                 // Cull nodes from rendering when they are outside the visible canvas area
-                .filter(|(node, _)| alloc.intersect(&node.allocation()).is_some())
+                .filter(|(node, _)| {
+                    let n_width = node.width() as f32;
+                    let n_height = node.height() as f32;
+                    let p = node
+                        .compute_point(widget, &Point::new(0.0, 0.0))
+                        .unwrap_or(Point::new(0.0, 0.0));
+                    let (n_x, n_y) = (p.x(), p.y());
+                    n_x < width as f32
+                        && n_y < height as f32
+                        && n_x + n_width > 0.0
+                        && n_y + n_height > 0.0
+                })
                 .for_each(|(node, _)| widget.snapshot_child(node, snapshot));
 
             self.snapshot_links(widget, snapshot);
@@ -276,6 +287,7 @@ mod imp {
             drag_controller.connect_drag_begin(|drag_controller, x, y| {
                 let widget = drag_controller
                     .widget()
+                    .unwrap()
                     .dynamic_cast::<super::GraphView>()
                     .expect("drag-begin event is not on the GraphView");
                 let mut dragged_node = widget.imp().dragged_node.borrow_mut();
@@ -315,6 +327,7 @@ mod imp {
             drag_controller.connect_drag_update(|drag_controller, x, y| {
                 let widget = drag_controller
                     .widget()
+                    .unwrap()
                     .dynamic_cast::<super::GraphView>()
                     .expect("drag-update event is not on the GraphView");
                 let dragged_node = widget.imp().dragged_node.borrow();
@@ -348,6 +361,7 @@ mod imp {
             controller.connect_enter(|controller, x, y| {
                 let graph = controller
                     .widget()
+                    .unwrap()
                     .downcast::<super::GraphView>()
                     .expect("Widget should be a graphview");
 
@@ -357,6 +371,7 @@ mod imp {
             controller.connect_motion(|controller, x, y| {
                 let graph = controller
                     .widget()
+                    .unwrap()
                     .downcast::<super::GraphView>()
                     .expect("Widget should be a graphview");
 
@@ -366,6 +381,7 @@ mod imp {
             controller.connect_leave(|controller| {
                 let graph = controller
                     .widget()
+                    .unwrap()
                     .downcast::<super::GraphView>()
                     .expect("Widget should be a graphview");
 
@@ -386,14 +402,18 @@ mod imp {
                 Port::static_type(),
                 glib::Priority::DEFAULT,
                 Option::<&gio::Cancellable>::None,
-                clone!(@weak self as imp => move|value| {
-                    let Ok(value) = value else {
-                        return;
-                    };
-                    let port: &Port = value.get().expect("Value should contain a port");
+                clone!(
+                    #[weak(rename_to = imp)]
+                    self,
+                    move |value| {
+                        let Ok(value) = value else {
+                            return;
+                        };
+                        let port: &Port = value.get().expect("Value should contain a port");
 
-                    imp.dragged_port.set(Some(port));
-                }),
+                        imp.dragged_port.set(Some(port));
+                    }
+                ),
             );
 
             self.obj().queue_draw();
@@ -430,6 +450,7 @@ mod imp {
                 {
                     let widget = eventcontroller
                         .widget()
+                        .unwrap()
                         .downcast::<super::GraphView>()
                         .unwrap();
                     widget.set_zoom_factor(widget.zoom_factor() + (0.1 * -delta_y), None);
@@ -445,7 +466,11 @@ mod imp {
         fn setup_zoom_gesture(&self) {
             let zoom_gesture = gtk::GestureZoom::new();
             zoom_gesture.connect_begin(|gesture, _| {
-                let widget = gesture.widget().downcast::<super::GraphView>().unwrap();
+                let widget = gesture
+                    .widget()
+                    .unwrap()
+                    .downcast::<super::GraphView>()
+                    .unwrap();
 
                 widget
                     .imp()
@@ -457,7 +482,11 @@ mod imp {
                     .set(gesture.bounding_box_center());
             });
             zoom_gesture.connect_scale_changed(move |gesture, delta| {
-                let widget = gesture.widget().downcast::<super::GraphView>().unwrap();
+                let widget = gesture
+                    .widget()
+                    .unwrap()
+                    .downcast::<super::GraphView>()
+                    .unwrap();
 
                 let initial_zoom = widget
                     .imp()
@@ -480,6 +509,7 @@ mod imp {
             drag_controller.connect_drag_begin(|drag_controller, _, _| {
                 let widget = drag_controller
                     .widget()
+                    .unwrap()
                     .downcast::<super::GraphView>()
                     .unwrap();
 
@@ -489,6 +519,7 @@ mod imp {
             drag_controller.connect_drag_update(|drag_controller, x, y| {
                 let widget = drag_controller
                     .widget()
+                    .unwrap()
                     .downcast::<super::GraphView>()
                     .unwrap();
 
@@ -601,34 +632,18 @@ mod imp {
         }
 
         fn snapshot_links(&self, widget: &super::GraphView, snapshot: &gtk::Snapshot) {
-            let alloc = widget.allocation();
+            let (width, height) = (widget.width(), widget.height());
 
-            let link_cr = snapshot.append_cairo(&graphene::Rect::new(
-                0.0,
-                0.0,
-                alloc.width() as f32,
-                alloc.height() as f32,
-            ));
+            let link_cr =
+                snapshot.append_cairo(&graphene::Rect::new(0.0, 0.0, width as f32, height as f32));
 
             link_cr.set_line_width(2.0 * self.zoom_factor.get());
 
             let colors = Colors {
-                audio: widget
-                    .style_context()
-                    .lookup_color("media-type-audio")
-                    .expect("color not found"),
-                video: widget
-                    .style_context()
-                    .lookup_color("media-type-video")
-                    .expect("color not found"),
-                midi: widget
-                    .style_context()
-                    .lookup_color("media-type-midi")
-                    .expect("color not found"),
-                unknown: widget
-                    .style_context()
-                    .lookup_color("media-type-unknown")
-                    .expect("color not found"),
+                audio: gdk::RGBA::new(50.0 / 255.0, 100.0 / 255.0, 240.0 / 255.0, 1.0),
+                video: gdk::RGBA::new(200.0 / 255.0, 200.0 / 255.0, 0.0, 1.0),
+                midi: gdk::RGBA::new(200.0 / 255.0, 0.0, 50.0 / 255.0, 1.0),
+                unknown: gdk::RGBA::new(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0),
             };
 
             for link in self.links.borrow().iter() {
@@ -688,8 +703,11 @@ mod imp {
             }
 
             if let Some(adjustment) = adjustment {
-                adjustment
-                    .connect_value_changed(clone!(@weak obj => move |_|  obj.queue_allocate() ));
+                adjustment.connect_value_changed(clone!(
+                    #[weak]
+                    obj,
+                    move |_| obj.queue_allocate()
+                ));
             }
         }
 
@@ -720,7 +738,7 @@ mod imp {
 
 glib::wrapper! {
     pub struct GraphView(ObjectSubclass<imp::GraphView>)
-        @extends gtk::Widget;
+        @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Scrollable;
 }
 
 impl GraphView {
@@ -748,12 +766,8 @@ impl GraphView {
     pub fn set_zoom_factor(&self, zoom_factor: f64, anchor: Option<(f64, f64)>) {
         let zoom_factor = zoom_factor.clamp(Self::ZOOM_MIN, Self::ZOOM_MAX);
 
-        let (anchor_x_screen, anchor_y_screen) = anchor.unwrap_or_else(|| {
-            (
-                self.allocation().width() as f64 / 2.0,
-                self.allocation().height() as f64 / 2.0,
-            )
-        });
+        let (anchor_x_screen, anchor_y_screen) =
+            anchor.unwrap_or_else(|| (self.width() as f64 / 2.0, self.height() as f64 / 2.0));
 
         let old_zoom = self.imp().zoom_factor.get();
         let hadjustment_ref = self.imp().hadjustment.borrow();
@@ -822,15 +836,23 @@ impl GraphView {
     pub fn add_link(&self, link: Link) {
         link.connect_notify_local(
             Some("active"),
-            glib::clone!(@weak self as graph => move |_, _| {
-                graph.queue_draw();
-            }),
+            glib::clone!(
+                #[weak(rename_to = graph)]
+                self,
+                move |_, _| {
+                    graph.queue_draw();
+                }
+            ),
         );
         link.connect_notify_local(
             Some("media-type"),
-            glib::clone!(@weak self as graph => move |_, _| {
-                graph.queue_draw();
-            }),
+            glib::clone!(
+                #[weak(rename_to = graph)]
+                self,
+                move |_, _| {
+                    graph.queue_draw();
+                }
+            ),
         );
         self.imp().links.borrow_mut().insert(link);
         self.queue_draw();

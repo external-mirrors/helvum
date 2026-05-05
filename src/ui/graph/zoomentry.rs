@@ -8,7 +8,7 @@ mod imp {
     use super::*;
 
     use gtk::{gio, glib::clone};
-    use once_cell::sync::Lazy;
+    use std::sync::LazyLock;
 
     #[derive(gtk::CompositeTemplate)]
     #[template(file = "zoomentry.ui")]
@@ -65,37 +65,49 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
 
-            self.zoom_out_button
-                .connect_clicked(clone!(@weak self as imp => move |_| {
+            self.zoom_out_button.connect_clicked(clone!(
+                #[weak(rename_to = imp)]
+                self,
+                move |_| {
                     let graphview = imp.graphview.borrow();
                     if let Some(ref graphview) = *graphview {
                         graphview.set_zoom_factor(graphview.zoom_factor() - 0.1, None);
                     }
-                }));
+                }
+            ));
 
-            self.zoom_in_button
-                .connect_clicked(clone!(@weak self as imp => move |_| {
+            self.zoom_in_button.connect_clicked(clone!(
+                #[weak(rename_to = imp)]
+                self,
+                move |_| {
                     let graphview = imp.graphview.borrow();
                     if let Some(ref graphview) = *graphview {
                         graphview.set_zoom_factor(graphview.zoom_factor() + 0.1, None);
                     }
-                }));
+                }
+            ));
 
-            self.entry
-                .connect_activate(clone!(@weak self as imp => move |entry| {
+            self.entry.connect_activate(clone!(
+                #[weak(rename_to = imp)]
+                self,
+                move |entry| {
                     if let Ok(zoom_factor) = entry.text().trim_matches('%').parse::<f64>() {
                         let graphview = imp.graphview.borrow();
                         if let Some(ref graphview) = *graphview {
                             graphview.set_zoom_factor(zoom_factor / 100.0, None);
                         }
                     }
-                }));
-            self.entry
-                .connect_icon_press(clone!(@weak self as imp => move |_, pos| {
+                }
+            ));
+            self.entry.connect_icon_press(clone!(
+                #[weak(rename_to = imp)]
+                self,
+                move |_, pos| {
                     if pos == gtk::EntryIconPosition::Secondary {
-                        imp.popover.show();
+                        imp.popover.set_visible(true);
                     }
-                }));
+                }
+            ));
 
             self.popover.set_parent(&self.entry.get());
         }
@@ -109,7 +121,7 @@ mod imp {
         }
 
         fn properties() -> &'static [glib::ParamSpec] {
-            static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
+            static PROPERTIES: LazyLock<Vec<glib::ParamSpec>> = LazyLock::new(|| {
                 vec![glib::ParamSpecObject::builder::<GraphView>("zoomed-widget")
                     .flags(glib::ParamFlags::READWRITE | glib::ParamFlags::CONSTRUCT)
                     .build()]
@@ -132,9 +144,13 @@ mod imp {
                     if let Some(ref widget) = widget {
                         widget.connect_notify_local(
                             Some("zoom-factor"),
-                            clone!(@weak self as imp => move |graphview, _| {
-                                imp.update_zoom_factor_text(graphview.zoom_factor());
-                            }),
+                            clone!(
+                                #[weak(rename_to = imp)]
+                                self,
+                                move |graphview, _| {
+                                    imp.update_zoom_factor_text(graphview.zoom_factor());
+                                }
+                            ),
                         );
                         self.update_zoom_factor_text(widget.zoom_factor());
                     }
@@ -161,7 +177,7 @@ mod imp {
 
 glib::wrapper! {
     pub struct ZoomEntry(ObjectSubclass<imp::ZoomEntry>)
-        @extends gtk::Box, gtk::Widget;
+        @extends gtk::Box, gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Orientable;
 }
 
 impl ZoomEntry {

@@ -23,22 +23,21 @@ use std::{
     time::Duration,
 };
 
-use adw::glib::{self, clone};
+use libspa::{
+    param::{ParamInfoFlags, ParamType},
+    utils::dict::DictRef,
+};
 use log::{debug, error, info, warn};
 use pipewire::{
+    context::ContextRc,
+    core::CoreRc,
     keys,
-    link::{Link, LinkChangeMask, LinkInfo, LinkListener, LinkState},
-    node::{Node, NodeInfo, NodeListener},
-    port::{Port, PortChangeMask, PortInfo, PortListener},
-    prelude::*,
-    properties,
-    registry::{GlobalObject, Registry},
-    spa::{
-        param::{ParamInfoFlags, ParamType},
-        ForeignDict, SpaResult,
-    },
+    link::{Link, LinkChangeMask, LinkListener, LinkState},
+    main_loop::MainLoopRc,
+    node::{Node, NodeListener},
+    port::{Port, PortChangeMask, PortListener},
+    registry::{GlobalObject, RegistryRc},
     types::ObjectType,
-    Context, Core, MainLoop,
 };
 
 use crate::{GtkMessage, MediaType, NodeType, PipewireMessage};
@@ -61,50 +60,45 @@ enum ProxyItem {
 
 /// The "main" function of the pipewire thread.
 pub(super) fn thread_main(
-    gtk_sender: glib::Sender<PipewireMessage>,
+    gtk_sender: async_channel::Sender<PipewireMessage>,
     mut pw_receiver: pipewire::channel::Receiver<GtkMessage>,
 ) {
-    let mainloop = MainLoop::new().expect("Failed to create mainloop");
-    let context = Rc::new(Context::new(&mainloop).expect("Failed to create context"));
+    let mainloop = MainLoopRc::new(None).expect("Failed to create mainloop");
+    let context = ContextRc::new(&mainloop, None).expect("Failed to create context");
     let is_stopped = Rc::new(Cell::new(false));
     let mut is_connecting = false;
 
     while !is_stopped.get() {
         // Try to connect
-        let core = match context.connect(Some(properties! {
-            "media.category" => "Manager"
-        })) {
-            Ok(core) => Rc::new(core),
+        let core = match context.connect_rc(None) {
+            Ok(core) => core,
             Err(_) => {
                 if !is_connecting {
                     is_connecting = true;
                     gtk_sender
-                        .send(PipewireMessage::Connecting)
+                        .send_blocking(PipewireMessage::Connecting)
                         .expect("Failed to send message");
                 }
 
-                // If connection is failed, try to connect again in 200ms
+                // If connection failed, try again in 200ms
                 let interval = Some(Duration::from_millis(200));
-
-                let timer = mainloop.add_timer(clone!(@strong mainloop => move |_| {
-                    mainloop.quit();
-                }));
-
+                let ml = mainloop.clone();
+                let timer = mainloop.loop_().add_timer(move |_| {
+                    ml.quit();
+                });
                 timer.update_timer(interval, None).into_result().unwrap();
 
-                let receiver = pw_receiver.attach(&mainloop, {
-                    clone!(@strong mainloop, @strong is_stopped => move |msg|
-                        if let GtkMessage::Terminate = msg {
-                            // main thread requested stop
-                            is_stopped.set(true);
-                            mainloop.quit();
-                        }
-                    )
+                let ml2 = mainloop.clone();
+                let is_stopped2 = is_stopped.clone();
+                let receiver = pw_receiver.attach(mainloop.loop_(), move |msg| {
+                    if let GtkMessage::Terminate = msg {
+                        is_stopped2.set(true);
+                        ml2.quit();
+                    }
                 });
 
                 mainloop.run();
                 pw_receiver = receiver.deattach();
-
                 continue;
             }
         };
@@ -112,73 +106,92 @@ pub(super) fn thread_main(
         if is_connecting {
             is_connecting = false;
             gtk_sender
-                .send(PipewireMessage::Connected)
+                .send_blocking(PipewireMessage::Connected)
                 .expect("Failed to send message");
         }
 
-        let registry = Rc::new(core.get_registry().expect("Failed to get registry"));
+        let registry = core.get_registry_rc().expect("Failed to get registry");
 
-        // Keep proxies and their listeners alive so that we can receive info events.
-        let proxies = Rc::new(RefCell::new(HashMap::new()));
+        let proxies: Rc<RefCell<HashMap<u32, ProxyItem>>> = Rc::new(RefCell::new(HashMap::new()));
         let state = Rc::new(RefCell::new(State::new()));
 
-        let receiver = pw_receiver.attach(&mainloop, {
-            clone!(@strong mainloop, @weak core, @weak registry, @strong state, @strong is_stopped => move |msg| match msg {
-                GtkMessage::ToggleLink { port_from, port_to } => toggle_link(port_from, port_to, &core, &registry, &state),
-                GtkMessage::Terminate => {
-                    // main thread requested stop
-                    is_stopped.set(true);
-                    mainloop.quit();
-                }
-            })
+        // Attach receiver to process GTK→PW messages
+        let ml3 = mainloop.clone();
+        let core2 = core.clone();
+        let registry2 = registry.clone();
+        let state2 = state.clone();
+        let is_stopped2 = is_stopped.clone();
+        let receiver = pw_receiver.attach(mainloop.loop_(), move |msg| match msg {
+            GtkMessage::ToggleLink { port_from, port_to } => {
+                toggle_link(port_from, port_to, &core2, &registry2, &state2)
+            }
+            GtkMessage::Terminate => {
+                is_stopped2.set(true);
+                ml3.quit();
+            }
         });
 
-        let gtk_sender = gtk_sender.clone();
-        let _listener = core.add_listener_local()
-            .error(clone!(@strong mainloop, @strong gtk_sender, @strong is_stopped => move |id, _seq, res, message| {
-                if id != pipewire::PW_ID_CORE {
+        // Listen for core errors (e.g. disconnection)
+        let gtk_sender2 = gtk_sender.clone();
+        let ml4 = mainloop.clone();
+        let _listener = core
+            .add_listener_local()
+            .error(move |id, _seq, res, message| {
+                if id != 0 {
                     return;
                 }
-
                 if res == -libc::EPIPE {
-                    gtk_sender.send(PipewireMessage::Disconnected)
+                    gtk_sender2
+                        .send_blocking(PipewireMessage::Disconnected)
                         .expect("Failed to send message");
-                    mainloop.quit();
+                    ml4.quit();
                 } else {
+                    use libspa::utils::result::SpaResult;
                     let serr = SpaResult::from_c(res).into_result().unwrap_err();
                     error!("Pipewire Core received error {serr}: {message}");
                 }
-            }))
+            })
             .register();
 
+        // Listen for registry events (nodes, ports, links appearing / disappearing)
+        let gtk_sender3 = gtk_sender.clone();
+        let registry3 = registry.clone();
+        let proxies2 = proxies.clone();
+        let state3 = state.clone();
+        let proxies_remove = proxies.clone();
+        let state_remove = state.clone();
+        let gtk_sender4 = gtk_sender.clone();
         let _listener = registry
             .add_listener_local()
-            .global(clone!(@strong gtk_sender, @weak registry, @strong proxies, @strong state =>
-                move |global| match global.type_ {
-                    ObjectType::Node => handle_node(global, &gtk_sender, &registry, &proxies, &state),
-                    ObjectType::Port => handle_port(global, &gtk_sender, &registry, &proxies, &state),
-                    ObjectType::Link => handle_link(global, &gtk_sender, &registry, &proxies, &state),
-                    _ => {
-                        // Other objects are not interesting to us
-                    }
+            .global(move |global| match global.type_ {
+                ObjectType::Node => {
+                    handle_node(global, &gtk_sender3, &registry3, &proxies2, &state3)
                 }
-            ))
-            .global_remove(clone!(@strong proxies, @strong state => move |id| {
-                if let Some(item) = state.borrow_mut().remove(id) {
-                    gtk_sender.send(match item {
-                        Item::Node { .. } => PipewireMessage::NodeRemoved {id},
-                        Item::Port { node_id } => PipewireMessage::PortRemoved {id, node_id},
-                        Item::Link { .. } => PipewireMessage::LinkRemoved {id},
-                    }).expect("Failed to send message");
+                ObjectType::Port => {
+                    handle_port(global, &gtk_sender3, &registry3, &proxies2, &state3)
+                }
+                ObjectType::Link => {
+                    handle_link(global, &gtk_sender3, &registry3, &proxies2, &state3)
+                }
+                _ => {}
+            })
+            .global_remove(move |id| {
+                if let Some(item) = state_remove.borrow_mut().remove(id) {
+                    gtk_sender4
+                        .send_blocking(match item {
+                            Item::Node => PipewireMessage::NodeRemoved { id },
+                            Item::Port { node_id } => PipewireMessage::PortRemoved { id, node_id },
+                            Item::Link { .. } => PipewireMessage::LinkRemoved { id },
+                        })
+                        .expect("Failed to send message");
                 } else {
                     warn!(
                         "Attempted to remove item with id {} that is not saved in state",
                         id
                     );
                 }
-
-                proxies.borrow_mut().remove(&id);
-            }))
+                proxies_remove.borrow_mut().remove(&id);
+            })
             .register();
 
         mainloop.run();
@@ -187,7 +200,7 @@ pub(super) fn thread_main(
 }
 
 /// Get the nicest possible name for the node, using a fallback chain of possible name attributes
-fn get_node_name(props: &ForeignDict) -> &str {
+fn get_node_name(props: &DictRef) -> &str {
     props
         .get(&keys::NODE_DESCRIPTION)
         .or_else(|| props.get(&keys::NODE_NICK))
@@ -197,9 +210,9 @@ fn get_node_name(props: &ForeignDict) -> &str {
 
 /// Handle a new node being added
 fn handle_node(
-    node: &GlobalObject<ForeignDict>,
-    sender: &glib::Sender<PipewireMessage>,
-    registry: &Rc<Registry>,
+    node: &GlobalObject<&DictRef>,
+    sender: &async_channel::Sender<PipewireMessage>,
+    registry: &RegistryRc,
     proxies: &Rc<RefCell<HashMap<u32, ProxyItem>>>,
     state: &Rc<RefCell<State>>,
 ) {
@@ -233,7 +246,7 @@ fn handle_node(
     state.borrow_mut().insert(node.id, Item::Node);
 
     sender
-        .send(PipewireMessage::NodeAdded {
+        .send_blocking(PipewireMessage::NodeAdded {
             id: node.id,
             name,
             node_type,
@@ -241,11 +254,13 @@ fn handle_node(
         .expect("Failed to send message");
 
     let proxy: Node = registry.bind(node).expect("Failed to bind to node proxy");
+    let sender2 = sender.clone();
+    let proxies2 = proxies.clone();
     let listener = proxy
         .add_listener_local()
-        .info(clone!(@strong sender, @strong proxies => move |info| {
-            handle_node_info(info, &sender, &proxies);
-        }))
+        .info(move |info| {
+            handle_node_info(info, &sender2, &proxies2);
+        })
         .register();
 
     proxies.borrow_mut().insert(
@@ -258,8 +273,8 @@ fn handle_node(
 }
 
 fn handle_node_info(
-    info: &NodeInfo,
-    sender: &glib::Sender<PipewireMessage>,
+    info: &pipewire::node::NodeInfoRef,
+    sender: &async_channel::Sender<PipewireMessage>,
     proxies: &Rc<RefCell<HashMap<u32, ProxyItem>>>,
 ) {
     debug!("Received node info: {:?}", info);
@@ -276,7 +291,7 @@ fn handle_node_info(
         let name = get_node_name(props).to_string();
 
         sender
-            .send(PipewireMessage::NodeNameChanged {
+            .send_blocking(PipewireMessage::NodeNameChanged {
                 id,
                 name,
                 media_name: media_name.to_string(),
@@ -287,26 +302,29 @@ fn handle_node_info(
 
 /// Handle a new port being added
 fn handle_port(
-    port: &GlobalObject<ForeignDict>,
-    sender: &glib::Sender<PipewireMessage>,
-    registry: &Rc<Registry>,
+    port: &GlobalObject<&DictRef>,
+    sender: &async_channel::Sender<PipewireMessage>,
+    registry: &RegistryRc,
     proxies: &Rc<RefCell<HashMap<u32, ProxyItem>>>,
     state: &Rc<RefCell<State>>,
 ) {
     let port_id = port.id;
     let proxy: Port = registry.bind(port).expect("Failed to bind to port proxy");
+
+    let sender2 = sender.clone();
+    let proxies2 = proxies.clone();
+    let state2 = state.clone();
+    let sender3 = sender.clone();
     let listener = proxy
         .add_listener_local()
-        .info(
-            clone!(@strong proxies, @strong state, @strong sender => move |info| {
-                handle_port_info(info, &proxies, &state, &sender);
-            }),
-        )
-        .param(clone!(@strong sender => move |_, param_id, _, _, param| {
+        .info(move |info| {
+            handle_port_info(info, &proxies2, &state2, &sender2);
+        })
+        .param(move |_, param_id, _, _, param| {
             if param_id == ParamType::EnumFormat {
-                handle_port_enum_format(port_id, param, &sender)
+                handle_port_enum_format(port_id, param, &sender3)
             }
-        }))
+        })
         .register();
 
     proxies.borrow_mut().insert(
@@ -319,10 +337,10 @@ fn handle_port(
 }
 
 fn handle_port_info(
-    info: &PortInfo,
+    info: &pipewire::port::PortInfoRef,
     proxies: &Rc<RefCell<HashMap<u32, ProxyItem>>>,
     state: &Rc<RefCell<State>>,
-    sender: &glib::Sender<PipewireMessage>,
+    sender: &async_channel::Sender<PipewireMessage>,
 ) {
     debug!("Received port info: {:?}", info);
 
@@ -341,7 +359,7 @@ fn handle_port_info(
             // TODO: React to param changes
         }
     } else {
-        // First time we get info. We can now notify the gtk thread of a new link.
+        // First time we get info. We can now notify the gtk thread of a new port.
         let props = info.props().expect("Port object is missing properties");
         let name = props.get("port.name").unwrap_or_default().to_string();
         let node_id: u32 = props
@@ -363,7 +381,7 @@ fn handle_port_info(
         }
 
         sender
-            .send(PipewireMessage::PortAdded {
+            .send_blocking(PipewireMessage::PortAdded {
                 id,
                 node_id,
                 name,
@@ -375,16 +393,16 @@ fn handle_port_info(
 
 fn handle_port_enum_format(
     port_id: u32,
-    param: Option<&pipewire::spa::pod::Pod>,
-    sender: &glib::Sender<PipewireMessage>,
+    param: Option<&libspa::pod::Pod>,
+    sender: &async_channel::Sender<PipewireMessage>,
 ) {
     let media_type = param
-        .and_then(|param| pipewire::spa::param::format_utils::parse_format(param).ok())
+        .and_then(|param| libspa::param::format_utils::parse_format(param).ok())
         .map(|(media_type, _media_subtype)| media_type)
         .unwrap_or(MediaType::Unknown);
 
     sender
-        .send(PipewireMessage::PortFormatChanged {
+        .send_blocking(PipewireMessage::PortFormatChanged {
             id: port_id,
             media_type,
         })
@@ -393,11 +411,11 @@ fn handle_port_enum_format(
 
 /// Handle a new link being added
 fn handle_link(
-    link: &GlobalObject<ForeignDict>,
-    sender: &glib::Sender<PipewireMessage>,
-    registry: &Rc<Registry>,
+    link: &GlobalObject<&DictRef>,
+    sender: &async_channel::Sender<PipewireMessage>,
+    registry: &RegistryRc,
     proxies: &Rc<RefCell<HashMap<u32, ProxyItem>>>,
-    state: &Rc<RefCell<State>>,
+    _state: &Rc<RefCell<State>>,
 ) {
     debug!(
         "New link (id:{}) appeared, setting up info listener.",
@@ -405,11 +423,13 @@ fn handle_link(
     );
 
     let proxy: Link = registry.bind(link).expect("Failed to bind to link proxy");
+    let sender2 = sender.clone();
+    let state_link = _state.clone();
     let listener = proxy
         .add_listener_local()
-        .info(clone!(@strong state, @strong sender => move |info| {
-            handle_link_info(info, &state, &sender);
-        }))
+        .info(move |info| {
+            handle_link_info(info, &state_link, &sender2);
+        })
         .register();
 
     proxies.borrow_mut().insert(
@@ -422,9 +442,9 @@ fn handle_link(
 }
 
 fn handle_link_info(
-    info: &LinkInfo,
+    info: &pipewire::link::LinkInfoRef,
     state: &Rc<RefCell<State>>,
-    sender: &glib::Sender<PipewireMessage>,
+    sender: &async_channel::Sender<PipewireMessage>,
 ) {
     debug!("Received link info: {:?}", info);
 
@@ -432,10 +452,9 @@ fn handle_link_info(
 
     let mut state = state.borrow_mut();
     if let Some(Item::Link { .. }) = state.get(id) {
-        // Info was an update - figure out if we should notify the gtk thread
         if info.change_mask().contains(LinkChangeMask::STATE) {
             sender
-                .send(PipewireMessage::LinkStateChanged {
+                .send_blocking(PipewireMessage::LinkStateChanged {
                     id,
                     active: matches!(info.state(), LinkState::Active),
                 })
@@ -443,21 +462,20 @@ fn handle_link_info(
         }
         if info.change_mask().contains(LinkChangeMask::FORMAT) {
             sender
-                .send(PipewireMessage::LinkFormatChanged {
+                .send_blocking(PipewireMessage::LinkFormatChanged {
                     id,
                     media_type: get_link_media_type(info),
                 })
                 .expect("Failed to send message");
         }
     } else {
-        // First time we get info. We can now notify the gtk thread of a new link.
         let port_from = info.output_port_id();
         let port_to = info.input_port_id();
 
         state.insert(id, Item::Link { port_from, port_to });
 
         sender
-            .send(PipewireMessage::LinkAdded {
+            .send_blocking(PipewireMessage::LinkAdded {
                 id,
                 port_from,
                 port_to,
@@ -472,15 +490,13 @@ fn handle_link_info(
 fn toggle_link(
     port_from: u32,
     port_to: u32,
-    core: &Rc<Core>,
-    registry: &Rc<Registry>,
+    core: &CoreRc,
+    registry: &RegistryRc,
     state: &Rc<RefCell<State>>,
 ) {
-    let state = state.borrow_mut();
+    let state = state.borrow();
     if let Some(id) = state.get_link_id(port_from, port_to) {
         info!("Requesting removal of link with id {}", id);
-
-        // FIXME: Handle error
         registry.destroy_global(id);
     } else {
         info!(
@@ -495,9 +511,9 @@ fn toggle_link(
             .get_node_of_port(port_to)
             .expect("Requested port not in state");
 
-        if let Err(e) = core.create_object::<Link, _>(
+        if let Err(e) = core.create_object::<Link>(
             "link-factory",
-            &properties! {
+            &pipewire::properties::properties! {
                 "link.output.node" => node_from.to_string(),
                 "link.output.port" => port_from.to_string(),
                 "link.input.node" => node_to.to_string(),
@@ -510,12 +526,10 @@ fn toggle_link(
     }
 }
 
-fn get_link_media_type(link_info: &LinkInfo) -> MediaType {
-    let media_type = link_info
+fn get_link_media_type(link_info: &pipewire::link::LinkInfoRef) -> MediaType {
+    link_info
         .format()
-        .and_then(|format| pipewire::spa::param::format_utils::parse_format(format).ok())
+        .and_then(|format| libspa::param::format_utils::parse_format(format).ok())
         .map(|(media_type, _media_subtype)| media_type)
-        .unwrap_or(MediaType::Unknown);
-
-    media_type
+        .unwrap_or(MediaType::Unknown)
 }

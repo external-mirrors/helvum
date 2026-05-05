@@ -16,11 +16,12 @@
 
 use adw::{
     gio,
-    glib::{self, clone, Receiver},
+    glib::{self, clone},
     gtk,
     prelude::*,
     subclass::prelude::*,
 };
+use async_channel::Receiver;
 use pipewire::channel::Sender;
 
 use crate::{graph_manager::GraphManager, ui, GtkMessage, PipewireMessage};
@@ -34,7 +35,7 @@ mod imp {
     use super::*;
 
     use adw::subclass::prelude::AdwApplicationImpl;
-    use once_cell::unsync::OnceCell;
+    use std::cell::OnceCell;
 
     #[derive(Default)]
     pub struct Application {
@@ -60,13 +61,17 @@ mod imp {
 
             let zoom_set_action =
                 gio::SimpleAction::new("set-zoom", Some(&f64::static_variant_type()));
-            zoom_set_action.connect_activate(clone!(@weak graphview => move|_, param| {
-                let zoom_factor = param.unwrap().get::<f64>().unwrap();
-                graphview.set_zoom_factor(zoom_factor, None)
-            }));
+            zoom_set_action.connect_activate(clone!(
+                #[weak]
+                graphview,
+                move |_, param| {
+                    let zoom_factor = param.unwrap().get::<f64>().unwrap();
+                    graphview.set_zoom_factor(zoom_factor, None)
+                }
+            ));
             self.window.add_action(&zoom_set_action);
 
-            self.window.show();
+            self.window.present();
         }
 
         fn startup(&self) {
@@ -78,7 +83,7 @@ mod imp {
 
             // Load CSS from the STYLE variable.
             let provider = gtk::CssProvider::new();
-            provider.load_from_data(STYLE);
+            provider.load_from_string(STYLE);
             gtk::style_context_add_provider_for_display(
                 &gtk::gdk::Display::default().expect("Error initializing gtk css provider."),
                 &provider,
@@ -97,9 +102,13 @@ mod imp {
 
             // Add <Control-Q> shortcut for quitting the application.
             let quit = gtk::gio::SimpleAction::new("quit", None);
-            quit.connect_activate(clone!(@weak obj => move |_, _| {
-                obj.quit();
-            }));
+            quit.connect_activate(clone!(
+                #[weak]
+                obj,
+                move |_, _| {
+                    obj.quit();
+                }
+            ));
             obj.set_accels_for_action("app.quit", &["<Control>Q"]);
             obj.add_action(&quit);
 
@@ -116,8 +125,7 @@ mod imp {
             let window = obj.active_window().unwrap();
             let authors: Vec<&str> = AUTHORS.split(':').collect();
 
-            let about_window = adw::AboutWindow::builder()
-                .transient_for(&window)
+            let about_dialog = adw::AboutDialog::builder()
                 .application_icon(APP_ID)
                 .application_name("Helvum")
                 .developer_name("Tom Wagner")
@@ -128,7 +136,7 @@ mod imp {
                 .license_type(gtk::License::Gpl30Only)
                 .build();
 
-            about_window.present();
+            about_dialog.present(Some(&window));
         }
     }
 }

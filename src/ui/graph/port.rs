@@ -21,7 +21,7 @@ use adw::{
     prelude::*,
     subclass::prelude::*,
 };
-use pipewire::spa::Direction;
+use libspa::utils::Direction;
 
 use super::PortHandle;
 
@@ -30,8 +30,8 @@ mod imp {
 
     use std::cell::Cell;
 
-    use once_cell::{sync::Lazy, unsync::OnceCell};
-    use pipewire::spa::{format::MediaType, Direction};
+    use libspa::{param::format::MediaType, utils::Direction};
+    use std::sync::LazyLock;
 
     /// Graphical representation of a pipewire port.
     #[derive(gtk::CompositeTemplate, glib::Properties)]
@@ -39,7 +39,7 @@ mod imp {
     #[template(file = "port.ui")]
     pub struct Port {
         #[property(get, set, construct_only)]
-        pub(super) pipewire_id: OnceCell<u32>,
+        pub(super) pipewire_id: Cell<u32>,
         #[property(
             type = u32,
             get = |_| self.media_type.get().as_raw(),
@@ -70,7 +70,7 @@ mod imp {
     impl Default for Port {
         fn default() -> Self {
             Self {
-                pipewire_id: OnceCell::default(),
+                pipewire_id: Cell::new(0),
                 media_type: Cell::new(MediaType::Unknown),
                 direction: Cell::new(Direction::Output),
                 label: TemplateChild::default(),
@@ -112,7 +112,7 @@ mod imp {
         }
 
         fn signals() -> &'static [Signal] {
-            static SIGNALS: Lazy<Vec<Signal>> = Lazy::new(|| {
+            static SIGNALS: LazyLock<Vec<Signal>> = LazyLock::new(|| {
                 vec![Signal::builder("port-toggled")
                     // Provide id of output port and input port to signal handler.
                     .param_types([<u32>::static_type(), <u32>::static_type()])
@@ -218,6 +218,7 @@ mod imp {
             drag_src.connect_drag_begin(|drag_source, _| {
                 let port = drag_source
                     .widget()
+                    .unwrap()
                     .dynamic_cast::<super::Port>()
                     .expect("Widget should be a Port");
 
@@ -226,6 +227,7 @@ mod imp {
             drag_src.connect_drag_cancel(|drag_source, _, _| {
                 let port = drag_source
                     .widget()
+                    .unwrap()
                     .dynamic_cast::<super::Port>()
                     .expect("Widget should be a Port");
 
@@ -241,6 +243,7 @@ mod imp {
             drop_target.connect_value_notify(|drop_target| {
                 let port = drop_target
                     .widget()
+                    .unwrap()
                     .dynamic_cast::<super::Port>()
                     .expect("Widget should be a Port");
 
@@ -260,6 +263,7 @@ mod imp {
             drop_target.connect_drop(|drop_target, val, _, _| {
                 let port = drop_target
                     .widget()
+                    .unwrap()
                     .dynamic_cast::<super::Port>()
                     .expect("Widget should be a Port");
                 let other_port = val
@@ -328,7 +332,7 @@ mod imp {
 
 glib::wrapper! {
     pub struct Port(ObjectSubclass<imp::Port>)
-        @extends gtk::Widget;
+        @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl Port {
@@ -341,21 +345,13 @@ impl Port {
     }
 
     pub fn link_anchor(&self) -> graphene::Point {
-        let style_context = self.style_context();
-        let padding_right: f32 = style_context.padding().right().into();
-        let border_right: f32 = style_context.border().right().into();
-        let padding_left: f32 = style_context.padding().left().into();
-        let border_left: f32 = style_context.border().left().into();
+        let imp = self.imp();
+        let handle = &imp.handle;
+        let (width, height) = (handle.width() as f32, handle.height() as f32);
 
-        let direction = Direction::from_raw(self.direction());
-        graphene::Point::new(
-            match direction {
-                Direction::Output => self.width() as f32 + padding_right + border_right,
-                Direction::Input => 0.0 - padding_left - border_left,
-                _ => unreachable!(),
-            },
-            self.height() as f32 / 2.0,
-        )
+        handle
+            .compute_point(self, &graphene::Point::new(width / 2.0, height / 2.0))
+            .expect("Failed to compute link anchor")
     }
 
     pub fn is_linkable_to(&self, other_port: &Self) -> bool {
