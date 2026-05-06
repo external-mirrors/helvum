@@ -15,12 +15,14 @@
     </description>
     <screenshots>
         <screenshot type="default">
+            <caption>The main window of Helvum</caption>
             <image>https://gitlab.freedesktop.org/pipewire/helvum/-/raw/main/docs/screenshot.png</image>
         </screenshot>
     </screenshots>
     <launchable type="desktop-id">@app-id@.desktop</launchable>
     <url type="homepage">https://gitlab.freedesktop.org/pipewire/helvum</url>
     <url type="bugtracker">https://gitlab.freedesktop.org/pipewire/helvum/-/issues</url>
+    <url type="vcs-browser">https://gitlab.freedesktop.org/pipewire/helvum</url>
     <content_rating type="oars-1.0" />
     <releases>
         <release version="0.6.0" date="2026-05-06" />
@@ -38,7 +40,7 @@
         <release version="0.1.0" date="2021-01-12" />
     </releases>
     <kudos>
-        <kodu>HiDpiIcon</kodu>
+        <kudo>HiDpiIcon</kudo>
         <kudo>ModernToolkit</kudo>
     </kudos>
     <developer_name>Tom A. Wagner</developer_name>
