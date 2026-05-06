@@ -26,6 +26,7 @@ use adw::{
     subclass::prelude::*,
 };
 
+use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use std::cmp::Ordering;
 
 use super::{Link, Node, Port};
@@ -44,6 +45,7 @@ mod imp {
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
     use petgraph::stable_graph::{StableGraph, NodeIndex, EdgeIndex};
+    use petgraph::visit::EdgeRef;
     use petgraph::Directed;
 
     use adw::gtk::gdk;
@@ -239,30 +241,35 @@ mod imp {
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let widget = &*self.obj();
-            let (width, height) = (widget.width(), widget.height());
+            let (width, height) = (widget.width() as f32, widget.height() as f32);
+
+            let inv_transform = self.screen_space_to_canvas_space_transform();
+
+            let p0 = inv_transform.transform_point(&Point::new(0.0, 0.0));
+            let p1 = inv_transform.transform_point(&Point::new(width, height));
+
+            let (min_x, max_x) = (p0.x().min(p1.x()), p0.x().max(p1.x()));
+            let (min_y, max_y) = (p0.y().min(p1.y()), p0.y().max(p1.y()));
 
             // Draw all visible children
             for nw in self.graph.borrow().node_weights() {
                 let node = &nw.widget;
+                let point = &nw.position;
 
                 let n_width = node.width() as f32;
                 let n_height = node.height() as f32;
-                let p = node
-                    .compute_point(widget, &Point::new(0.0, 0.0))
-                    .unwrap_or(Point::new(0.0, 0.0));
-                let (n_x, n_y) = (p.x(), p.y());
 
-                let is_visible = n_x < width as f32
-                    && n_y < height as f32
-                    && n_x + n_width > 0.0
-                    && n_y + n_height > 0.0;
+                let is_visible = point.x() < max_x
+                    && point.y() < max_y
+                    && point.x() + n_width > min_x
+                    && point.y() + n_height > min_y;
 
                 if is_visible {
                     widget.snapshot_child(node, snapshot);
                 }
             }
 
-            self.snapshot_links(widget, snapshot);
+            self.snapshot_links(widget, snapshot, min_x, max_x, min_y, max_y);
         }
     }
 
@@ -645,7 +652,15 @@ mod imp {
             self.draw_link(snapshot, output_anchor, input_anchor, false, color);
         }
 
-        fn snapshot_links(&self, _widget: &super::GraphView, snapshot: &gtk::Snapshot) {
+        fn snapshot_links(
+            &self,
+            _widget: &super::GraphView,
+            snapshot: &gtk::Snapshot,
+            min_x: f32,
+            max_x: f32,
+            min_y: f32,
+            max_y: f32,
+        ) {
             let colors = Colors {
                 audio: gdk::RGBA::new(50.0 / 255.0, 100.0 / 255.0, 240.0 / 255.0, 1.0),
                 video: gdk::RGBA::new(200.0 / 255.0, 200.0 / 255.0, 0.0, 1.0),
@@ -653,10 +668,27 @@ mod imp {
                 unknown: gdk::RGBA::new(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0),
             };
 
-            for link in self.graph.borrow().edge_weights() {
+            let graph = self.graph.borrow();
+
+            for edge in graph.edge_references() {
+                let link = edge.weight();
+
+                let (source, target) = graph.edge_endpoints(edge.id()).unwrap();
+                let source_nw = &graph[source];
+                let target_nw = &graph[target];
+
+                let padding = 100.0;
+                let l_min_x = source_nw.position.x().min(target_nw.position.x()) - padding;
+                let l_max_x = source_nw.position.x().max(target_nw.position.x()) + 500.0;
+                let l_min_y = source_nw.position.y().min(target_nw.position.y()) - padding;
+                let l_max_y = source_nw.position.y().max(target_nw.position.y()) + 500.0;
+
+                if l_max_x < min_x || l_min_x > max_x || l_max_y < min_y || l_min_y > max_y {
+                    continue;
+                }
+
                 let mut media_type = MediaType::from(link.media_type());
 
-                // If link media type is unknown, try to fall back to port media types.
                 if media_type == MediaType::Unknown {
                     if let Some(output_port) = link.output_port() {
                         media_type = MediaType::from(output_port.media_type());
@@ -845,7 +877,6 @@ impl GraphView {
         let mut link_to_index = imp.link_to_index.borrow_mut();
 
         if let Some(index) = node_to_index.remove(node) {
-            use petgraph::visit::EdgeRef;
             // Remove all associated links from the link_to_index map
             let edge_indices: Vec<_> = graph.edges(index).map(|e| e.id()).collect();
             for edge_idx in edge_indices {
