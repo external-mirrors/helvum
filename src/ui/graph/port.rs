@@ -21,6 +21,7 @@ use adw::{
     prelude::*,
     subclass::prelude::*,
 };
+use crate::PortId;
 use libspa::utils::Direction;
 
 use super::PortHandle;
@@ -222,7 +223,7 @@ mod imp {
                     .dynamic_cast::<super::Port>()
                     .expect("Widget should be a Port");
 
-                log::trace!("Drag started from port {}", port.pipewire_id());
+                log::trace!("Drag started from port {}", port.pw_id());
             });
             drag_src.connect_drag_cancel(|drag_source, _, _| {
                 let port = drag_source
@@ -231,7 +232,7 @@ mod imp {
                     .dynamic_cast::<super::Port>()
                     .expect("Widget should be a Port");
 
-                log::trace!("Drag from port {} was cancelled", port.pipewire_id());
+                log::trace!("Drag from port {} was cancelled", port.pw_id());
 
                 false
             });
@@ -284,7 +285,7 @@ mod imp {
 
                 port.emit_by_name::<()>(
                     "port-toggled",
-                    &[&output_port.pipewire_id(), &input_port.pipewire_id()],
+                    &[&output_port.pw_id().0, &input_port.pw_id().0],
                 );
 
                 true
@@ -336,12 +337,16 @@ glib::wrapper! {
 }
 
 impl Port {
-    pub fn new(id: u32, name: &str, direction: Direction) -> Self {
+    pub fn new(id: PortId, name: &str, direction: Direction) -> Self {
         glib::Object::builder()
-            .property("pipewire-id", id)
+            .property("pipewire-id", id.0)
             .property("direction", direction.as_raw())
             .property("name", name)
             .build()
+    }
+
+    pub fn pw_id(&self) -> PortId {
+        PortId(self.property("pipewire-id"))
     }
 
     pub fn link_anchor(&self) -> graphene::Point {

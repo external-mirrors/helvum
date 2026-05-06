@@ -22,11 +22,41 @@ mod ui;
 use adw::{gtk, prelude::*};
 use libspa::{param::format::MediaType, utils::Direction};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NodeId(pub u32);
+
+impl std::fmt::Display for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PortId(pub u32);
+
+impl std::fmt::Display for PortId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LinkId(pub u32);
+
+impl std::fmt::Display for LinkId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Messages sent by the GTK thread to notify the pipewire thread.
 #[derive(Debug, Clone)]
 pub enum GtkMessage {
     /// Toggle a link between the two specified ports.
-    ToggleLink { port_from: u32, port_to: u32 },
+    ToggleLink {
+        port_from: PortId,
+        port_to: PortId,
+    },
     /// Quit the event loop and let the thread finish.
     Terminate,
 }
@@ -35,49 +65,49 @@ pub enum GtkMessage {
 #[derive(Debug, Clone)]
 pub enum PipewireMessage {
     NodeAdded {
-        id: u32,
+        id: NodeId,
         name: String,
         node_type: Option<NodeType>,
     },
     NodeNameChanged {
-        id: u32,
+        id: NodeId,
         name: String,
         media_name: String,
     },
     PortAdded {
-        id: u32,
-        node_id: u32,
+        id: PortId,
+        node_id: NodeId,
         name: String,
         direction: Direction,
     },
     PortFormatChanged {
-        id: u32,
+        id: PortId,
         media_type: MediaType,
     },
     LinkAdded {
-        id: u32,
-        port_from: u32,
-        port_to: u32,
+        id: LinkId,
+        port_from: PortId,
+        port_to: PortId,
         active: bool,
         media_type: MediaType,
     },
     LinkStateChanged {
-        id: u32,
+        id: LinkId,
         active: bool,
     },
     LinkFormatChanged {
-        id: u32,
+        id: LinkId,
         media_type: MediaType,
     },
     NodeRemoved {
-        id: u32,
+        id: NodeId,
     },
     PortRemoved {
-        id: u32,
-        node_id: u32,
+        id: PortId,
+        node_id: NodeId,
     },
     LinkRemoved {
-        id: u32,
+        id: LinkId,
     },
     Connecting,
     Connected,
@@ -92,10 +122,10 @@ pub enum NodeType {
 
 #[derive(Debug, Clone)]
 pub struct PipewireLink {
-    pub node_from: u32,
-    pub port_from: u32,
-    pub node_to: u32,
-    pub port_to: u32,
+    pub node_from: NodeId,
+    pub port_from: PortId,
+    pub node_to: NodeId,
+    pub port_to: PortId,
 }
 
 static GLIB_LOGGER: glib::GlibLogger = glib::GlibLogger::new(

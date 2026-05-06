@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
+use crate::{LinkId, NodeId, PortId};
 use std::collections::HashMap;
 
 /// Any pipewire item we need to keep track of.
@@ -23,11 +24,11 @@ pub(super) enum Item {
     Port {
         // Save the id of the node this is on so we can remove the port from it
         // when it is deleted.
-        node_id: u32,
+        node_id: NodeId,
     },
     Link {
-        port_from: u32,
-        port_to: u32,
+        port_from: PortId,
+        port_to: PortId,
     },
 }
 
@@ -39,7 +40,7 @@ pub(super) struct State {
     /// Map pipewire ids to items.
     items: HashMap<u32, Item>,
     /// Map `(output port id, input port id)` tuples to the id of the link that connects them.
-    links: HashMap<(u32, u32), u32>,
+    links: HashMap<(PortId, PortId), LinkId>,
 }
 
 impl State {
@@ -51,10 +52,12 @@ impl State {
     /// Add a new item under the specified id.
     pub fn insert(&mut self, id: u32, item: Item) {
         if let Item::Link {
-            port_from, port_to, ..
+            port_from,
+            port_to,
+            ..
         } = item
         {
-            self.links.insert((port_from, port_to), id);
+            self.links.insert((port_from, port_to), LinkId(id));
         }
 
         self.items.insert(id, item);
@@ -66,7 +69,7 @@ impl State {
     }
 
     /// Get the id of the link that links the two specified ports.
-    pub fn get_link_id(&self, output_port: u32, input_port: u32) -> Option<u32> {
+    pub fn get_link_id(&self, output_port: PortId, input_port: PortId) -> Option<LinkId> {
         self.links.get(&(output_port, input_port)).copied()
     }
 
@@ -82,8 +85,8 @@ impl State {
     }
 
     /// Convenience function: Get the id of the node a port is on
-    pub fn get_node_of_port(&self, port: u32) -> Option<u32> {
-        if let Some(Item::Port { node_id }) = self.get(port) {
+    pub fn get_node_of_port(&self, port: PortId) -> Option<NodeId> {
+        if let Some(Item::Port { node_id }) = self.get(port.0) {
             Some(*node_id)
         } else {
             None

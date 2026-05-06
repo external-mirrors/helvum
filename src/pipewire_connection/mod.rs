@@ -40,7 +40,7 @@ use pipewire::{
     types::ObjectType,
 };
 
-use crate::{GtkMessage, MediaType, NodeType, PipewireMessage};
+use crate::{GtkMessage, LinkId, MediaType, NodeId, NodeType, PipewireMessage, PortId};
 use state::{Item, State};
 
 enum ProxyItem {
@@ -179,9 +179,11 @@ pub(super) fn thread_main(
                 if let Some(item) = state_remove.borrow_mut().remove(id) {
                     gtk_sender4
                         .send_blocking(match item {
-                            Item::Node => PipewireMessage::NodeRemoved { id },
-                            Item::Port { node_id } => PipewireMessage::PortRemoved { id, node_id },
-                            Item::Link { .. } => PipewireMessage::LinkRemoved { id },
+                            Item::Node => PipewireMessage::NodeRemoved { id: NodeId(id) },
+                            Item::Port { node_id } => {
+                                PipewireMessage::PortRemoved { id: PortId(id), node_id }
+                            }
+                            Item::Link { .. } => PipewireMessage::LinkRemoved { id: LinkId(id) },
                         })
                         .expect("Failed to send message");
                 } else {
@@ -247,7 +249,7 @@ fn handle_node(
 
     sender
         .send_blocking(PipewireMessage::NodeAdded {
-            id: node.id,
+            id: NodeId(node.id),
             name,
             node_type,
         })
@@ -292,7 +294,7 @@ fn handle_node_info(
 
         sender
             .send_blocking(PipewireMessage::NodeNameChanged {
-                id,
+                id: NodeId(id),
                 name,
                 media_name: media_name.to_string(),
             })
@@ -362,11 +364,13 @@ fn handle_port_info(
         // First time we get info. We can now notify the gtk thread of a new port.
         let props = info.props().expect("Port object is missing properties");
         let name = props.get("port.name").unwrap_or_default().to_string();
-        let node_id: u32 = props
-            .get("node.id")
-            .expect("Port has no node.id property!")
-            .parse()
-            .expect("Could not parse node.id property");
+        let node_id = NodeId(
+            props
+                .get("node.id")
+                .expect("Port has no node.id property!")
+                .parse()
+                .expect("Could not parse node.id property"),
+        );
 
         state.insert(id, Item::Port { node_id });
 
@@ -382,7 +386,7 @@ fn handle_port_info(
 
         sender
             .send_blocking(PipewireMessage::PortAdded {
-                id,
+                id: PortId(id),
                 node_id,
                 name,
                 direction: info.direction(),
@@ -403,7 +407,7 @@ fn handle_port_enum_format(
 
     sender
         .send_blocking(PipewireMessage::PortFormatChanged {
-            id: port_id,
+            id: PortId(port_id),
             media_type,
         })
         .expect("Failed to send message")
@@ -455,7 +459,7 @@ fn handle_link_info(
         if info.change_mask().contains(LinkChangeMask::STATE) {
             sender
                 .send_blocking(PipewireMessage::LinkStateChanged {
-                    id,
+                    id: LinkId(id),
                     active: matches!(info.state(), LinkState::Active),
                 })
                 .expect("Failed to send message");
@@ -463,20 +467,20 @@ fn handle_link_info(
         if info.change_mask().contains(LinkChangeMask::FORMAT) {
             sender
                 .send_blocking(PipewireMessage::LinkFormatChanged {
-                    id,
+                    id: LinkId(id),
                     media_type: get_link_media_type(info),
                 })
                 .expect("Failed to send message");
         }
     } else {
-        let port_from = info.output_port_id();
-        let port_to = info.input_port_id();
+        let port_from = PortId(info.output_port_id());
+        let port_to = PortId(info.input_port_id());
 
         state.insert(id, Item::Link { port_from, port_to });
 
         sender
             .send_blocking(PipewireMessage::LinkAdded {
-                id,
+                id: LinkId(id),
                 port_from,
                 port_to,
                 active: matches!(info.state(), LinkState::Active),
@@ -488,20 +492,20 @@ fn handle_link_info(
 
 /// Toggle a link between the two specified ports.
 fn toggle_link(
-    port_from: u32,
-    port_to: u32,
+    port_from: PortId,
+    port_to: PortId,
     core: &CoreRc,
     registry: &RegistryRc,
     state: &Rc<RefCell<State>>,
 ) {
     let state = state.borrow();
     if let Some(id) = state.get_link_id(port_from, port_to) {
-        info!("Requesting removal of link with id {}", id);
-        registry.destroy_global(id);
+        info!("Requesting removal of link with id {}", id.0);
+        registry.destroy_global(id.0);
     } else {
         info!(
             "Requesting creation of link from port id:{} to port id:{}",
-            port_from, port_to
+            port_from.0, port_to.0
         );
 
         let node_from = state

@@ -17,6 +17,7 @@
 use adw::{glib, gtk, prelude::*, subclass::prelude::*};
 use libspa::utils::Direction;
 
+use crate::NodeId;
 use super::Port;
 
 mod imp {
@@ -153,11 +154,15 @@ glib::wrapper! {
 }
 
 impl Node {
-    pub fn new(name: &str, pipewire_id: u32) -> Self {
+    pub fn new(name: &str, pipewire_id: NodeId) -> Self {
         glib::Object::builder()
             .property("node-name", name)
-            .property("pipewire-id", pipewire_id)
+            .property("pipewire-id", pipewire_id.0)
             .build()
+    }
+
+    pub fn pw_id(&self) -> NodeId {
+        NodeId(self.property("pipewire-id"))
     }
 
     pub fn add_port(&self, port: Port) {

@@ -556,6 +556,8 @@ mod imp {
             let input_x = input_anchor.x();
             let input_y = input_anchor.y();
 
+            let zoom = self.zoom_factor.get() as f32;
+
             let builder = gsk::PathBuilder::new();
             builder.move_to(output_x, output_y);
 
@@ -563,7 +565,7 @@ mod imp {
             // a similar y coordinate, apply a y offset to the control points
             // so that the curve sticks out a bit.
             let y_control_offset = if output_x > input_x {
-                f32::max(0.0, 25.0 - (output_y - input_y).abs())
+                f32::max(0.0, (25.0 * zoom) - (output_y - input_y).abs())
             } else {
                 0.0
             };
@@ -582,11 +584,12 @@ mod imp {
             );
 
             let path = builder.to_path();
-            let stroke = gsk::Stroke::new(2.0 * self.zoom_factor.get() as f32);
+            let stroke_width = f32::max(1.0, 2.0 * zoom);
+            let stroke = gsk::Stroke::new(stroke_width);
 
             // Use dashed line for inactive links, full line otherwise.
             if !active {
-                stroke.set_dash(&[10.0, 5.0]);
+                stroke.set_dash(&[10.0 * zoom, 5.0 * zoom]);
             }
 
             snapshot.append_stroke(&path, &stroke, color);
@@ -620,7 +623,12 @@ mod imp {
                 _ => unreachable!(),
             };
 
-            let color = &colors.color_for_media_type(MediaType::from_raw(port.media_type()));
+            let mut media_type = MediaType::from_raw(port.media_type());
+            if media_type == MediaType::Unknown {
+                media_type = MediaType::Unknown;
+            }
+
+            let color = &colors.color_for_media_type(media_type);
 
             self.draw_link(snapshot, output_anchor, input_anchor, false, color);
         }
@@ -634,9 +642,19 @@ mod imp {
             };
 
             for link in self.links.borrow().iter() {
-                let color = &colors.color_for_media_type(link.media_type());
+                let mut media_type = link.media_type();
 
-                // TODO: Do not draw links when they are outside the view
+                // If link media type is unknown, try to fall back to port media types.
+                if media_type == MediaType::Unknown {
+                    if let Some(output_port) = link.output_port() {
+                        media_type = MediaType::from_raw(output_port.media_type());
+                    } else if let Some(input_port) = link.input_port() {
+                        media_type = MediaType::from_raw(input_port.media_type());
+                    }
+                }
+
+                let color = &colors.color_for_media_type(media_type);
+
                 let Some((output_anchor, input_anchor)) = self.get_link_coordinates(link) else {
                     warn!("Could not get allocation of ports of link: {:?}", link);
                     continue;
@@ -852,7 +870,7 @@ impl GraphView {
         self.queue_draw();
     }
 
-    pub fn clear(&mut self) {
+    pub fn clear(&self) {
         self.imp().links.borrow_mut().clear();
         for (node, _) in self.imp().nodes.borrow_mut().drain() {
             node.unparent();
