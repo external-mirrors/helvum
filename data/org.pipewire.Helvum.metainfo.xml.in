@@ -6,6 +6,10 @@
     <project_license>GPL-3.0-only</project_license>
     <name>Helvum</name>
     <summary>Patchbay for PipeWire</summary>
+    <branding>
+        <color type="primary" scheme_preference="light">#6ea8ff</color>
+        <color type="primary" scheme_preference="dark">#2b4c7e</color>
+    </branding>
     <description>
         <p>
             Helvum is a graphical patchbay for PipeWire.
