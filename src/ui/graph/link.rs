@@ -17,7 +17,7 @@
 use adw::{glib, prelude::*, subclass::prelude::*};
 use libspa::param::format::MediaType;
 
-use super::Port;
+use super::{Port, PortMediaType};
 
 mod imp {
     use super::*;
@@ -30,7 +30,7 @@ mod imp {
         pub output_port: glib::WeakRef<Port>,
         pub input_port: glib::WeakRef<Port>,
         pub active: Cell<bool>,
-        pub media_type: Cell<MediaType>,
+        pub media_type: Cell<PortMediaType>,
     }
 
     impl Default for Link {
@@ -39,7 +39,7 @@ mod imp {
                 output_port: glib::WeakRef::default(),
                 input_port: glib::WeakRef::default(),
                 active: Cell::default(),
-                media_type: Cell::new(MediaType::Unknown),
+                media_type: Cell::new(PortMediaType::Unknown),
             }
         }
     }
@@ -65,8 +65,7 @@ mod imp {
                         .default_value(false)
                         .flags(glib::ParamFlags::READWRITE)
                         .build(),
-                    glib::ParamSpecUInt::builder("media-type")
-                        .default_value(MediaType::Unknown.as_raw())
+                    glib::ParamSpecEnum::builder::<PortMediaType>("media-type")
                         .flags(glib::ParamFlags::READWRITE)
                         .build(),
                 ]
@@ -80,7 +79,7 @@ mod imp {
                 "output-port" => self.output_port.upgrade().to_value(),
                 "input-port" => self.input_port.upgrade().to_value(),
                 "active" => self.active.get().to_value(),
-                "media-type" => self.media_type.get().as_raw().to_value(),
+                "media-type" => self.media_type.get().to_value(),
                 _ => unimplemented!(),
             }
         }
@@ -90,9 +89,7 @@ mod imp {
                 "output-port" => self.output_port.set(value.get().unwrap()),
                 "input-port" => self.input_port.set(value.get().unwrap()),
                 "active" => self.active.set(value.get().unwrap()),
-                "media-type" => self
-                    .media_type
-                    .set(MediaType::from_raw(value.get().unwrap())),
+                "media-type" => self.media_type.set(value.get().expect("Value should be a PortMediaType")),
                 _ => unimplemented!(),
             }
         }
@@ -132,12 +129,12 @@ impl Link {
         self.set_property("active", active);
     }
 
-    pub fn media_type(&self) -> MediaType {
-        MediaType::from_raw(self.property("media-type"))
+    pub fn media_type(&self) -> PortMediaType {
+        self.property("media-type")
     }
 
     pub fn set_media_type(&self, media_type: MediaType) {
-        self.set_property("media-type", media_type.as_raw())
+        self.set_property("media-type", PortMediaType::from(media_type))
     }
 }
 

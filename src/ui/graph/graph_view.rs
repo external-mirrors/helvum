@@ -39,9 +39,9 @@ mod imp {
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
 
-    use adw::gtk::gdk::{self};
+    use adw::gtk::gdk;
     use libspa::param::format::MediaType;
-    use libspa::utils::Direction;
+    use crate::ui::graph::PortDirection;
     use log::warn;
     use std::sync::LazyLock;
 
@@ -617,13 +617,12 @@ mod imp {
             });
             let other_anchor = picked_port_anchor.unwrap_or(drag_cursor);
 
-            let (output_anchor, input_anchor) = match Direction::from_raw(port.direction()) {
-                Direction::Output => (&port_anchor, &other_anchor),
-                Direction::Input => (&other_anchor, &port_anchor),
-                _ => unreachable!(),
+            let (output_anchor, input_anchor) = match port.port_direction() {
+                PortDirection::Output => (&port_anchor, &other_anchor),
+                PortDirection::Input => (&other_anchor, &port_anchor),
             };
 
-            let mut media_type = MediaType::from_raw(port.media_type());
+            let mut media_type = MediaType::from(port.media_type());
             if media_type == MediaType::Unknown {
                 media_type = MediaType::Unknown;
             }
@@ -642,14 +641,14 @@ mod imp {
             };
 
             for link in self.links.borrow().iter() {
-                let mut media_type = link.media_type();
+                let mut media_type = MediaType::from(link.media_type());
 
                 // If link media type is unknown, try to fall back to port media types.
                 if media_type == MediaType::Unknown {
                     if let Some(output_port) = link.output_port() {
-                        media_type = MediaType::from_raw(output_port.media_type());
+                        media_type = MediaType::from(output_port.media_type());
                     } else if let Some(input_port) = link.input_port() {
-                        media_type = MediaType::from_raw(input_port.media_type());
+                        media_type = MediaType::from(input_port.media_type());
                     }
                 }
 

@@ -239,7 +239,7 @@ mod imp {
                 return;
             };
 
-            port.set_media_type(media_type.as_raw())
+            port.set_media_type(media_type)
         }
 
         /// Remove the port with the id `id` from the node with the id `node_id`

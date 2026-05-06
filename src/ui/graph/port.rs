@@ -21,8 +21,9 @@ use adw::{
     prelude::*,
     subclass::prelude::*,
 };
+pub use imp::{PortDirection, PortMediaType};
 use crate::PortId;
-use libspa::utils::Direction;
+use libspa::{param::format::MediaType, utils::Direction};
 
 use super::PortHandle;
 
@@ -31,37 +32,78 @@ mod imp {
 
     use std::cell::Cell;
 
-    use libspa::{param::format::MediaType, utils::Direction};
+    use libspa::param::format::MediaType;
     use std::sync::LazyLock;
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, glib::Enum)]
+    #[enum_type(name = "HelvumPortDirection")]
+    pub enum PortDirection {
+        Input,
+        #[default]
+        Output,
+    }
+
+    impl From<Direction> for PortDirection {
+        fn from(direction: Direction) -> Self {
+            match direction {
+                Direction::Input => PortDirection::Input,
+                Direction::Output => PortDirection::Output,
+                _ => PortDirection::Input,
+            }
+        }
+    }
+
+    impl From<PortDirection> for Direction {
+        fn from(direction: PortDirection) -> Self {
+            match direction {
+                PortDirection::Input => Direction::Input,
+                PortDirection::Output => Direction::Output,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, glib::Enum)]
+    #[enum_type(name = "HelvumPortMediaType")]
+    pub enum PortMediaType {
+        #[default]
+        Unknown,
+        Audio,
+        Video,
+        Application,
+        Stream,
+    }
+
+    impl From<MediaType> for PortMediaType {
+        fn from(m: MediaType) -> Self {
+            match m {
+                MediaType::Audio => PortMediaType::Audio,
+                MediaType::Video => PortMediaType::Video,
+                MediaType::Application => PortMediaType::Application,
+                MediaType::Stream => PortMediaType::Stream,
+                _ => PortMediaType::Unknown,
+            }
+        }
+    }
+
+    impl From<PortMediaType> for MediaType {
+        fn from(m: PortMediaType) -> Self {
+            match m {
+                PortMediaType::Audio => MediaType::Audio,
+                PortMediaType::Video => MediaType::Video,
+                PortMediaType::Application => MediaType::Application,
+                PortMediaType::Stream => MediaType::Stream,
+                _ => MediaType::Unknown,
+            }
+        }
+    }
+
     /// Graphical representation of a pipewire port.
-    #[derive(gtk::CompositeTemplate, glib::Properties)]
-    #[properties(wrapper_type = super::Port)]
+    #[derive(gtk::CompositeTemplate)]
     #[template(file = "port.ui")]
     pub struct Port {
-        #[property(get, set, construct_only)]
         pub(super) pipewire_id: Cell<u32>,
-        #[property(
-            type = u32,
-            get = |_| self.media_type.get().as_raw(),
-            set = Self::set_media_type
-        )]
-        pub(super) media_type: Cell<MediaType>,
-        #[property(
-            type = u32,
-            get = |_| self.direction.get().as_raw(),
-            set = Self::set_direction,
-            construct_only
-        )]
-        pub(super) direction: Cell<Direction>,
-        #[property(
-            name = "name", type = String,
-            get = |this: &Self| this.label.text().to_string(),
-            set = |this: &Self, val| {
-                this.label.set_text(val);
-                this.label.set_tooltip_text(Some(val));
-            }
-        )]
+        pub(super) media_type: Cell<PortMediaType>,
+        pub(super) direction: Cell<PortDirection>,
         #[template_child]
         pub(super) label: TemplateChild<gtk::Label>,
         #[template_child]
@@ -72,8 +114,8 @@ mod imp {
         fn default() -> Self {
             Self {
                 pipewire_id: Cell::new(0),
-                media_type: Cell::new(MediaType::Unknown),
-                direction: Cell::new(Direction::Output),
+                media_type: Cell::new(PortMediaType::Unknown),
+                direction: Cell::new(PortDirection::Output),
                 label: TemplateChild::default(),
                 handle: TemplateChild::default(),
             }
@@ -97,13 +139,15 @@ mod imp {
         }
     }
 
-    #[glib::derived_properties]
     impl ObjectImpl for Port {
         fn constructed(&self) {
             self.parent_constructed();
 
             // Force left-to-right direction for the ports grid to avoid messed up UI when defaulting to right-to-left
-            self.obj().set_direction(gtk::TextDirection::Ltr);
+            gtk::prelude::WidgetExt::set_direction(&*self.obj(), gtk::TextDirection::Ltr);
+
+            // Initial UI update
+            self.update_ui_for_direction();
 
             // Display a grab cursor when the mouse is over the port so the user knows it can be dragged to another port.
             self.obj()
@@ -121,6 +165,57 @@ mod imp {
             });
 
             SIGNALS.as_ref()
+        }
+
+        fn properties() -> &'static [glib::ParamSpec] {
+            static PROPERTIES: LazyLock<Vec<glib::ParamSpec>> = LazyLock::new(|| {
+                vec![
+                    glib::ParamSpecEnum::builder::<PortDirection>("port-direction")
+                        .construct_only()
+                        .build(),
+                    glib::ParamSpecUInt::builder("pipewire-id")
+                        .construct_only()
+                        .build(),
+                    glib::ParamSpecEnum::builder::<PortMediaType>("media-type")
+                        .build(),
+                    glib::ParamSpecString::builder("name")
+                        .build(),
+                ]
+            });
+            PROPERTIES.as_ref()
+        }
+
+        fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+            match pspec.name() {
+                "port-direction" => {
+                    let val = value.get().expect("Value should be a PortDirection");
+                    self.direction.set(val);
+                    self.update_ui_for_direction();
+                }
+                "pipewire-id" => {
+                    self.pipewire_id.set(value.get().expect("Value should be a u32"));
+                }
+                "media-type" => {
+                    let val = value.get().expect("Value should be a PortMediaType");
+                    self.set_media_type(val);
+                }
+                "name" => {
+                    let val: String = value.get().expect("Value should be a String");
+                    self.label.set_text(&val);
+                    self.label.set_tooltip_text(Some(&val));
+                }
+                _ => unimplemented!(),
+            }
+        }
+
+        fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+            match pspec.name() {
+                "port-direction" => self.direction.get().to_value(),
+                "pipewire-id" => self.pipewire_id.get().to_value(),
+                "media-type" => self.media_type.get().to_value(),
+                "name" => self.label.text().to_string().to_value(),
+                _ => unimplemented!(),
+            }
         }
     }
 
@@ -164,8 +259,8 @@ mod imp {
             let (_, nat_handle_width, _, _) =
                 self.handle.measure(gtk::Orientation::Horizontal, width);
 
-            match Direction::from_raw(self.obj().direction()) {
-                Direction::Input => {
+            match self.obj().port_direction() {
+                PortDirection::Input => {
                     let alloc = gtk::Allocation::new(
                         -nat_handle_width / 2,
                         (height - nat_handle_height) / 2,
@@ -182,7 +277,7 @@ mod imp {
                     );
                     self.label.size_allocate(&alloc, -1);
                 }
-                Direction::Output => {
+                PortDirection::Output => {
                     let alloc = gtk::Allocation::new(
                         width - (nat_handle_width / 2),
                         (height - nat_handle_height) / 2,
@@ -194,7 +289,6 @@ mod imp {
                     let alloc = gtk::Allocation::new(0, 0, width - (nat_handle_width / 2), height);
                     self.label.size_allocate(&alloc, -1);
                 }
-                _ => unreachable!(),
             }
         }
     }
@@ -277,10 +371,9 @@ mod imp {
                     return false;
                 }
 
-                let (output_port, input_port) = match Direction::from_raw(port.direction()) {
-                    Direction::Output => (&port, &other_port),
-                    Direction::Input => (&other_port, &port),
-                    _ => unreachable!(),
+                let (output_port, input_port) = match port.port_direction() {
+                    PortDirection::Output => (&port, &other_port),
+                    PortDirection::Input => (&other_port, &port),
                 };
 
                 port.emit_by_name::<()>(
@@ -293,9 +386,7 @@ mod imp {
             obj.add_controller(drop_target);
         }
 
-        fn set_media_type(&self, media_type: u32) {
-            let media_type = MediaType::from_raw(media_type);
-
+        fn set_media_type(&self, media_type: PortMediaType) {
             self.media_type.set(media_type);
 
             for css_class in ["video", "audio", "midi"] {
@@ -303,7 +394,7 @@ mod imp {
             }
 
             // Color the port according to its media type.
-            match media_type {
+            match MediaType::from(media_type) {
                 MediaType::Video => self.handle.add_css_class("video"),
                 MediaType::Audio => self.handle.add_css_class("audio"),
                 MediaType::Application | MediaType::Stream => self.handle.add_css_class("midi"),
@@ -311,21 +402,18 @@ mod imp {
             }
         }
 
-        fn set_direction(&self, direction: u32) {
-            let direction = Direction::from_raw(direction);
-
-            self.direction.set(direction);
+        fn update_ui_for_direction(&self) {
+            let direction = self.direction.get();
 
             match direction {
-                Direction::Input => {
+                PortDirection::Input => {
                     self.obj().set_halign(gtk::Align::Start);
                     self.label.set_halign(gtk::Align::Start);
                 }
-                Direction::Output => {
+                PortDirection::Output => {
                     self.obj().set_halign(gtk::Align::End);
                     self.label.set_halign(gtk::Align::End);
                 }
-                _ => unreachable!(),
             }
         }
     }
@@ -340,9 +428,25 @@ impl Port {
     pub fn new(id: PortId, name: &str, direction: Direction) -> Self {
         glib::Object::builder()
             .property("pipewire-id", id.0)
-            .property("direction", direction.as_raw())
+            .property("port-direction", PortDirection::from(direction))
             .property("name", name)
             .build()
+    }
+
+    pub fn port_direction(&self) -> PortDirection {
+        self.property("port-direction")
+    }
+
+    pub fn name(&self) -> String {
+        self.property("name")
+    }
+
+    pub fn set_media_type(&self, media_type: MediaType) {
+        self.set_property("media-type", PortMediaType::from(media_type));
+    }
+
+    pub fn media_type(&self) -> PortMediaType {
+        self.property("media-type")
     }
 
     pub fn pw_id(&self) -> PortId {
@@ -360,6 +464,6 @@ impl Port {
     }
 
     pub fn is_linkable_to(&self, other_port: &Self) -> bool {
-        self.direction() != other_port.direction()
+        self.port_direction() != other_port.port_direction()
     }
 }

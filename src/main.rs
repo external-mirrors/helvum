@@ -114,8 +114,10 @@ pub enum PipewireMessage {
     Disconnected,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, glib::Enum)]
+#[enum_type(name = "HelvumNodeType")]
 pub enum NodeType {
+    #[default]
     Input,
     Output,
 }

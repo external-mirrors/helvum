@@ -15,7 +15,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use adw::{glib, gtk, prelude::*, subclass::prelude::*};
-use libspa::utils::Direction;
+use crate::ui::graph::PortDirection;
 
 use crate::NodeId;
 use super::Port;
@@ -120,14 +120,13 @@ mod imp {
 
             ports
                 .iter()
-                .for_each(|port| match Direction::from_raw(port.direction()) {
-                    Direction::Output => {
+                .for_each(|port| match port.port_direction() {
+                    PortDirection::Output => {
                         ports_out.push(port);
                     }
-                    Direction::Input => {
+                    PortDirection::Input => {
                         ports_in.push(port);
                     }
-                    _ => unreachable!(),
                 });
 
             ports_out.sort_unstable_by_key(|port| port.name());
