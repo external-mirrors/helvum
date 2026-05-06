@@ -26,7 +26,7 @@ use adw::{
     subclass::prelude::*,
 };
 
-use petgraph::visit::{EdgeRef, IntoEdgeReferences};
+use petgraph::visit::{EdgeRef, IntoEdgeReferences, IntoNodeReferences, Bfs, Reversed};
 use std::cmp::Ordering;
 
 use super::{Link, Node, Port};
@@ -43,9 +43,8 @@ mod imp {
     use super::*;
 
     use std::cell::{Cell, RefCell};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use petgraph::stable_graph::{StableGraph, NodeIndex, EdgeIndex};
-    use petgraph::visit::EdgeRef;
     use petgraph::Directed;
 
     use adw::gtk::gdk;
@@ -107,6 +106,8 @@ mod imp {
 
         // This keeps track of an ongoing move view gesture.
         pub move_view_state: Cell<(f64, f64)>,
+        pub highlighted_nodes: RefCell<HashSet<NodeIndex>>,
+        pub highlighted_edges: RefCell<HashSet<EdgeIndex>>,
     }
 
     impl Default for GraphView {
@@ -124,6 +125,8 @@ mod imp {
                 zoom_gesture_initial_zoom: Default::default(),
                 zoom_gesture_anchor: Default::default(),
                 move_view_state: Default::default(),
+                highlighted_nodes: Default::default(),
+                highlighted_edges: Default::default(),
             }
         }
     }
@@ -153,6 +156,7 @@ mod imp {
             self.setup_scroll_zooming();
             self.setup_zoom_gesture();
             self.setup_move_view();
+            self.setup_path_highlighting();
         }
 
         fn dispose(&self) {
@@ -251,8 +255,11 @@ mod imp {
             let (min_x, max_x) = (p0.x().min(p1.x()), p0.x().max(p1.x()));
             let (min_y, max_y) = (p0.y().min(p1.y()), p0.y().max(p1.y()));
 
+            let highlighted_nodes = self.highlighted_nodes.borrow();
+            let is_any_highlighted = !highlighted_nodes.is_empty();
+
             // Draw all visible children
-            for nw in self.graph.borrow().node_weights() {
+            for (idx, nw) in self.graph.borrow().node_references() {
                 let node = &nw.widget;
                 let point = &nw.position;
 
@@ -265,7 +272,14 @@ mod imp {
                     && point.y() + n_height > min_y;
 
                 if is_visible {
-                    widget.snapshot_child(node, snapshot);
+                    let is_highlighted = !is_any_highlighted || highlighted_nodes.contains(&idx);
+                    if is_highlighted {
+                        widget.snapshot_child(node, snapshot);
+                    } else {
+                        snapshot.push_opacity(0.3);
+                        widget.snapshot_child(node, snapshot);
+                        snapshot.pop();
+                    }
                 }
             }
 
@@ -561,6 +575,29 @@ mod imp {
             });
 
             self.obj().add_controller(drag_controller);
+        }
+
+        fn setup_path_highlighting(&self) {
+            let obj = self.obj();
+            let motion_controller = gtk::EventControllerMotion::new();
+
+            motion_controller.connect_motion(glib::clone!(
+                #[weak]
+                obj,
+                move |_, x, y| {
+                    obj.update_highlighting(x, y);
+                }
+            ));
+
+            motion_controller.connect_leave(glib::clone!(
+                #[weak]
+                obj,
+                move |_| {
+                    obj.clear_highlighting();
+                }
+            ));
+
+            obj.add_controller(motion_controller);
         }
 
         fn draw_link(
@@ -1000,6 +1037,73 @@ impl GraphView {
         ));
 
         self.queue_allocate();
+    }
+
+    pub fn update_highlighting(&self, x: f64, y: f64) {
+        let imp = self.imp();
+
+        let target = self.pick(x, y, gtk::PickFlags::DEFAULT);
+        let node_widget = target
+            .and_then(|t| t.ancestor(Node::static_type()))
+            .and_downcast::<Node>();
+
+        let mut highlighted_nodes = imp.highlighted_nodes.borrow_mut();
+        let mut highlighted_edges = imp.highlighted_edges.borrow_mut();
+
+        // If we are already highlighting this node, do nothing.
+        if let Some(ref node) = node_widget {
+            let node_to_index = imp.node_to_index.borrow();
+            if let Some(&idx) = node_to_index.get(node) {
+                if highlighted_nodes.len() > 0 && highlighted_nodes.contains(&idx) {
+                    return;
+                }
+            }
+        } else if highlighted_nodes.is_empty() {
+            return;
+        }
+
+        highlighted_nodes.clear();
+        highlighted_edges.clear();
+
+        if let Some(node) = node_widget {
+            let graph = imp.graph.borrow();
+            let node_to_index = imp.node_to_index.borrow();
+
+            if let Some(&start_idx) = node_to_index.get(&node) {
+                // Downstream
+                let mut bfs = Bfs::new(&*graph, start_idx);
+                while let Some(nx) = bfs.next(&*graph) {
+                    highlighted_nodes.insert(nx);
+                }
+
+                // Upstream
+                let rev_graph = Reversed(&*graph);
+                let mut bfs_rev = Bfs::new(rev_graph, start_idx);
+                while let Some(nx) = bfs_rev.next(rev_graph) {
+                    highlighted_nodes.insert(nx);
+                }
+
+                // Collect all edges between highlighted nodes
+                for edge in graph.edge_references() {
+                    if highlighted_nodes.contains(&edge.source())
+                        && highlighted_nodes.contains(&edge.target())
+                    {
+                        highlighted_edges.insert(edge.id());
+                    }
+                }
+            }
+        }
+
+        self.queue_draw();
+    }
+
+    pub fn clear_highlighting(&self) {
+        let imp = self.imp();
+        if !imp.highlighted_nodes.borrow().is_empty() {
+            imp.highlighted_nodes.borrow_mut().clear();
+            imp.highlighted_edges.borrow_mut().clear();
+            self.queue_draw();
+        }
     }
 }
 
