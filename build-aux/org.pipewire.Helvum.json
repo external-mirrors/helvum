@@ -13,8 +13,7 @@
         "--socket=wayland",
         "--device=dri",
         "--share=ipc",
-        "--filesystem=xdg-run/pipewire-0",
-        "--filesystem=host"
+        "--filesystem=xdg-run/pipewire-0"
     ],
     "build-options": {
         "append-path": "/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm22/bin",
