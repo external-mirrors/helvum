@@ -33,11 +33,18 @@ use crate::NodeType;
 
 const CANVAS_SIZE: f64 = 5000.0;
 
+pub struct NodeWeight {
+    pub widget: Node,
+    pub position: Point,
+}
+
 mod imp {
     use super::*;
 
     use std::cell::{Cell, RefCell};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
+    use petgraph::stable_graph::{StableGraph, NodeIndex, EdgeIndex};
+    use petgraph::Directed;
 
     use adw::gtk::gdk;
     use libspa::param::format::MediaType;
@@ -73,10 +80,12 @@ mod imp {
     }
 
     pub struct GraphView {
-        /// Stores nodes and their positions.
-        pub(super) nodes: RefCell<HashMap<Node, Point>>,
-        /// Stores the links and whether they are currently active.
-        pub(super) links: RefCell<HashSet<Link>>,
+        /// Stores the topological graph.
+        pub(super) graph: RefCell<StableGraph<NodeWeight, Link, Directed>>,
+        /// Fast lookup for nodes.
+        pub(super) node_to_index: RefCell<HashMap<Node, NodeIndex>>,
+        /// Fast lookup for links.
+        pub(super) link_to_index: RefCell<HashMap<Link, EdgeIndex>>,
 
         // Properties for zooming and scrolling the hraph
         pub hadjustment: RefCell<Option<gtk::Adjustment>>,
@@ -101,8 +110,9 @@ mod imp {
     impl Default for GraphView {
         fn default() -> Self {
             Self {
-                nodes: Default::default(),
-                links: Default::default(),
+                graph: Default::default(),
+                node_to_index: Default::default(),
+                link_to_index: Default::default(),
                 hadjustment: Default::default(),
                 vadjustment: Default::default(),
                 zoom_factor: Default::default(),
@@ -144,10 +154,9 @@ mod imp {
         }
 
         fn dispose(&self) {
-            self.nodes
-                .borrow()
-                .iter()
-                .for_each(|(node, _)| node.unparent())
+            for nw in self.graph.borrow().node_weights() {
+                nw.widget.unparent();
+            }
         }
 
         fn properties() -> &'static [glib::ParamSpec] {
@@ -203,7 +212,9 @@ mod imp {
         fn size_allocate(&self, _width: i32, _height: i32, baseline: i32) {
             let widget = &*self.obj();
 
-            for (node, point) in self.nodes.borrow().iter() {
+            for nw in self.graph.borrow().node_weights() {
+                let node = &nw.widget;
+                let point = &nw.position;
                 let (_, natural_size) = node.preferred_size();
 
                 let transform = self
@@ -231,23 +242,25 @@ mod imp {
             let (width, height) = (widget.width(), widget.height());
 
             // Draw all visible children
-            self.nodes
-                .borrow()
-                .iter()
-                // Cull nodes from rendering when they are outside the visible canvas area
-                .filter(|(node, _)| {
-                    let n_width = node.width() as f32;
-                    let n_height = node.height() as f32;
-                    let p = node
-                        .compute_point(widget, &Point::new(0.0, 0.0))
-                        .unwrap_or(Point::new(0.0, 0.0));
-                    let (n_x, n_y) = (p.x(), p.y());
-                    n_x < width as f32
-                        && n_y < height as f32
-                        && n_x + n_width > 0.0
-                        && n_y + n_height > 0.0
-                })
-                .for_each(|(node, _)| widget.snapshot_child(node, snapshot));
+            for nw in self.graph.borrow().node_weights() {
+                let node = &nw.widget;
+
+                let n_width = node.width() as f32;
+                let n_height = node.height() as f32;
+                let p = node
+                    .compute_point(widget, &Point::new(0.0, 0.0))
+                    .unwrap_or(Point::new(0.0, 0.0));
+                let (n_x, n_y) = (p.x(), p.y());
+
+                let is_visible = n_x < width as f32
+                    && n_y < height as f32
+                    && n_x + n_width > 0.0
+                    && n_y + n_height > 0.0;
+
+                if is_visible {
+                    widget.snapshot_child(node, snapshot);
+                }
+            }
 
             self.snapshot_links(widget, snapshot);
         }
@@ -640,7 +653,7 @@ mod imp {
                 unknown: gdk::RGBA::new(128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0),
             };
 
-            for link in self.links.borrow().iter() {
+            for link in self.graph.borrow().edge_weights() {
                 let mut media_type = MediaType::from(link.media_type());
 
                 // If link media type is unknown, try to fall back to port media types.
@@ -806,31 +819,41 @@ impl GraphView {
         };
 
         let y = imp
-            .nodes
+            .graph
             .borrow()
-            .iter()
-            .map(|node| {
-                // Map nodes to their locations
-                let point = self.node_position(&node.0.clone().upcast()).unwrap();
-                (point.x(), point.y())
-            })
-            .filter(|(x2, _)| {
-                // Only look for other nodes that have a similar x coordinate
-                (x - x2).abs() < 50.0
-            })
-            .max_by(|y1, y2| {
-                // Get max in column
-                y1.partial_cmp(y2).unwrap_or(Ordering::Equal)
-            })
-            .map_or(20_f32, |(_x, y)| y + 120.0);
+            .node_weights()
+            .filter(|nw| (x - nw.position.x()).abs() < 50.0)
+            .map(|nw| nw.position.y())
+            .max_by(|y1, y2| y1.partial_cmp(y2).unwrap_or(Ordering::Equal))
+            .map_or(20_f32, |y| y + 120.0);
 
-        imp.nodes.borrow_mut().insert(node, Point::new(x, y));
+        let mut graph = imp.graph.borrow_mut();
+        let mut node_to_index = imp.node_to_index.borrow_mut();
+
+        let position = Point::new(x, y);
+        let index = graph.add_node(crate::ui::graph::graph_view::NodeWeight {
+            widget: node.clone(),
+            position,
+        });
+        node_to_index.insert(node, index);
     }
 
     pub fn remove_node(&self, node: &Node) {
-        let mut nodes = self.imp().nodes.borrow_mut();
+        let imp = self.imp();
+        let mut graph = imp.graph.borrow_mut();
+        let mut node_to_index = imp.node_to_index.borrow_mut();
+        let mut link_to_index = imp.link_to_index.borrow_mut();
 
-        if nodes.remove(node).is_some() {
+        if let Some(index) = node_to_index.remove(node) {
+            use petgraph::visit::EdgeRef;
+            // Remove all associated links from the link_to_index map
+            let edge_indices: Vec<_> = graph.edges(index).map(|e| e.id()).collect();
+            for edge_idx in edge_indices {
+                let link = graph.edge_weight(edge_idx).unwrap().clone();
+                link_to_index.remove(&link);
+            }
+
+            graph.remove_node(index);
             node.unparent();
         } else {
             log::warn!("Tried to remove non-existant node widget from graph");
@@ -858,22 +881,58 @@ impl GraphView {
                 }
             ),
         );
-        self.imp().links.borrow_mut().insert(link);
+        let output_port = link.output_port().expect("Link should have an output port");
+        let input_port = link.input_port().expect("Link should have an input port");
+
+        let output_node = output_port.ancestor(Node::static_type()).and_downcast::<Node>().unwrap();
+        let input_node = input_port.ancestor(Node::static_type()).and_downcast::<Node>().unwrap();
+
+        let imp = self.imp();
+        let mut graph = imp.graph.borrow_mut();
+        let node_to_index = imp.node_to_index.borrow();
+        let mut link_to_index = imp.link_to_index.borrow_mut();
+
+        let Some(&output_idx) = node_to_index.get(&output_node) else {
+            log::warn!("Output node not found in graph");
+            return;
+        };
+        let Some(&input_idx) = node_to_index.get(&input_node) else {
+            log::warn!("Input node not found in graph");
+            return;
+        };
+
+        let edge_idx = graph.add_edge(output_idx, input_idx, link.clone());
+        link_to_index.insert(link, edge_idx);
+
         self.queue_draw();
     }
 
     pub fn remove_link(&self, link: &Link) {
-        let mut links = self.imp().links.borrow_mut();
-        links.remove(link);
+        let imp = self.imp();
+        let mut graph = imp.graph.borrow_mut();
+        let mut link_to_index = imp.link_to_index.borrow_mut();
+
+        if let Some(index) = link_to_index.remove(link) {
+            graph.remove_edge(index);
+        }
 
         self.queue_draw();
     }
 
     pub fn clear(&self) {
-        self.imp().links.borrow_mut().clear();
-        for (node, _) in self.imp().nodes.borrow_mut().drain() {
-            node.unparent();
+        let imp = self.imp();
+        let mut graph = imp.graph.borrow_mut();
+        let mut node_to_index = imp.node_to_index.borrow_mut();
+        let mut link_to_index = imp.link_to_index.borrow_mut();
+
+        for nw in graph.node_weights() {
+            nw.widget.unparent();
         }
+
+        graph.clear();
+        node_to_index.clear();
+        link_to_index.clear();
+
         self.queue_draw();
     }
 
@@ -881,19 +940,30 @@ impl GraphView {
     ///
     /// The returned position is in canvas-space (non-zoomed, (0, 0) fixed in the middle of the canvas).
     pub(super) fn node_position(&self, node: &Node) -> Option<Point> {
-        self.imp().nodes.borrow().get(node).copied()
+        let imp = self.imp();
+        let graph = imp.graph.borrow();
+        let node_to_index = imp.node_to_index.borrow();
+
+        node_to_index.get(node).map(|&idx| graph[idx].position)
     }
 
     pub(super) fn move_node(&self, widget: &Node, point: &Point) {
-        let mut nodes = self.imp().nodes.borrow_mut();
-        let node_point = nodes.get_mut(widget).expect("Node is not on the graph");
+        let imp = self.imp();
+        let mut graph = imp.graph.borrow_mut();
+        let node_to_index = imp.node_to_index.borrow();
+
+        let Some(&idx) = node_to_index.get(widget) else {
+            log::warn!("Node is not on the graph");
+            return;
+        };
+        let nw = &mut graph[idx];
 
         // Clamp the new position to within the graph, so a node can't be moved outside it and be lost.
-        node_point.set_x(point.x().clamp(
+        nw.position.set_x(point.x().clamp(
             -(CANVAS_SIZE / 2.0) as f32,
             (CANVAS_SIZE / 2.0) as f32 - widget.width() as f32,
         ));
-        node_point.set_y(point.y().clamp(
+        nw.position.set_y(point.y().clamp(
             -(CANVAS_SIZE / 2.0) as f32,
             (CANVAS_SIZE / 2.0) as f32 - widget.height() as f32,
         ));
