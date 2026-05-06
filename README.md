@@ -1,9 +1,5 @@
 Helvum is a GTK-based patchbay for pipewire, inspired by the JACK tool [catia](https://kx.studio/Applications:Catia).
 
-> [!caution]
-> Helvum is currently not actively maintained.
-> If you are interested in maintaining the project, please see https://gitlab.freedesktop.org/pipewire/helvum/-/issues/137
-
 ![Screenshot](docs/screenshot.png)
 
 `<a href="https://flathub.org/apps/details/org.pipewire.Helvum"><img src="https://flathub.org/assets/badges/flathub-badge-en.png" width="300"/>``</a>`
