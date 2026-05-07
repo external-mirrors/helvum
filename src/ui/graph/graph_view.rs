@@ -26,7 +26,7 @@ use adw::{
     subclass::prelude::*,
 };
 
-use petgraph::visit::{EdgeRef, IntoEdgeReferences, IntoNodeReferences, Bfs, Reversed};
+use petgraph::visit::{Bfs, EdgeRef, IntoEdgeReferences, IntoNodeReferences, Reversed};
 use std::cmp::Ordering;
 
 use super::{Link, Node, Port};
@@ -42,14 +42,14 @@ pub struct NodeWeight {
 mod imp {
     use super::*;
 
+    use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
+    use petgraph::Directed;
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
-    use petgraph::stable_graph::{StableGraph, NodeIndex, EdgeIndex};
-    use petgraph::Directed;
 
+    use crate::ui::graph::PortDirection;
     use adw::gtk::gdk;
     use libspa::param::format::MediaType;
-    use crate::ui::graph::PortDirection;
     use log::warn;
     use std::sync::LazyLock;
 
@@ -952,8 +952,14 @@ impl GraphView {
         let output_port = link.output_port().expect("Link should have an output port");
         let input_port = link.input_port().expect("Link should have an input port");
 
-        let output_node = output_port.ancestor(Node::static_type()).and_downcast::<Node>().unwrap();
-        let input_node = input_port.ancestor(Node::static_type()).and_downcast::<Node>().unwrap();
+        let output_node = output_port
+            .ancestor(Node::static_type())
+            .and_downcast::<Node>()
+            .unwrap();
+        let input_node = input_port
+            .ancestor(Node::static_type())
+            .and_downcast::<Node>()
+            .unwrap();
 
         let imp = self.imp();
         let mut graph = imp.graph.borrow_mut();
@@ -1050,11 +1056,10 @@ impl GraphView {
         let mut highlighted_nodes = imp.highlighted_nodes.borrow_mut();
         let mut highlighted_edges = imp.highlighted_edges.borrow_mut();
 
-        // If we are already highlighting this node, do nothing.
         if let Some(ref node) = node_widget {
             let node_to_index = imp.node_to_index.borrow();
             if let Some(&idx) = node_to_index.get(node) {
-                if highlighted_nodes.len() > 0 && highlighted_nodes.contains(&idx) {
+                if !highlighted_nodes.is_empty() && highlighted_nodes.contains(&idx) {
                     return;
                 }
             }

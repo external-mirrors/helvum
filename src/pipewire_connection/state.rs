@@ -52,9 +52,7 @@ impl State {
     /// Add a new item under the specified id.
     pub fn insert(&mut self, id: u32, item: Item) {
         if let Item::Link {
-            port_from,
-            port_to,
-            ..
+            port_from, port_to, ..
         } = item
         {
             self.links.insert((port_from, port_to), LinkId(id));

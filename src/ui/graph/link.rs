@@ -89,7 +89,9 @@ mod imp {
                 "output-port" => self.output_port.set(value.get().unwrap()),
                 "input-port" => self.input_port.set(value.get().unwrap()),
                 "active" => self.active.set(value.get().unwrap()),
-                "media-type" => self.media_type.set(value.get().expect("Value should be a PortMediaType")),
+                "media-type" => self
+                    .media_type
+                    .set(value.get().expect("Value should be a PortMediaType")),
                 _ => unimplemented!(),
             }
         }

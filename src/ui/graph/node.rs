@@ -14,11 +14,11 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-use adw::{glib, gtk, prelude::*, subclass::prelude::*};
 use crate::ui::graph::PortDirection;
+use adw::{glib, gtk, prelude::*, subclass::prelude::*};
 
-use crate::NodeId;
 use super::Port;
+use crate::NodeId;
 
 mod imp {
     use super::*;
@@ -118,16 +118,14 @@ mod imp {
             let mut ports_out = Vec::new();
             let mut ports_in = Vec::new();
 
-            ports
-                .iter()
-                .for_each(|port| match port.port_direction() {
-                    PortDirection::Output => {
-                        ports_out.push(port);
-                    }
-                    PortDirection::Input => {
-                        ports_in.push(port);
-                    }
-                });
+            ports.iter().for_each(|port| match port.port_direction() {
+                PortDirection::Output => {
+                    ports_out.push(port);
+                }
+                PortDirection::Input => {
+                    ports_in.push(port);
+                }
+            });
 
             ports_out.sort_unstable_by_key(|port| port.name());
             ports_in.sort_unstable_by_key(|port| port.name());

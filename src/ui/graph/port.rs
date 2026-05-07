@@ -14,6 +14,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
+use crate::PortId;
 use adw::{
     gdk,
     glib::{self, subclass::Signal},
@@ -22,7 +23,6 @@ use adw::{
     subclass::prelude::*,
 };
 pub use imp::{PortDirection, PortMediaType};
-use crate::PortId;
 use libspa::{param::format::MediaType, utils::Direction};
 
 
@@ -178,10 +178,8 @@ mod imp {
                     glib::ParamSpecUInt::builder("pipewire-id")
                         .construct_only()
                         .build(),
-                    glib::ParamSpecEnum::builder::<PortMediaType>("media-type")
-                        .build(),
-                    glib::ParamSpecString::builder("name")
-                        .build(),
+                    glib::ParamSpecEnum::builder::<PortMediaType>("media-type").build(),
+                    glib::ParamSpecString::builder("name").build(),
                 ]
             });
             PROPERTIES.as_ref()
@@ -195,7 +193,8 @@ mod imp {
                     self.update_ui_for_direction();
                 }
                 "pipewire-id" => {
-                    self.pipewire_id.set(value.get().expect("Value should be a u32"));
+                    self.pipewire_id
+                        .set(value.get().expect("Value should be a u32"));
                 }
                 "media-type" => {
                     let val = value.get().expect("Value should be a PortMediaType");
