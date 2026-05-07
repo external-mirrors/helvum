@@ -11,7 +11,7 @@ mod imp {
     use std::sync::LazyLock;
 
     #[derive(gtk::CompositeTemplate)]
-    #[template(file = "zoomentry.ui")]
+    #[template(resource = "/org/pipewire/Helvum/graph/zoomentry.ui")]
     pub struct ZoomEntry {
         pub graphview: RefCell<Option<GraphView>>,
         #[template_child]
@@ -187,3 +187,4 @@ impl ZoomEntry {
             .build()
     }
 }
+

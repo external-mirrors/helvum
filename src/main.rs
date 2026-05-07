@@ -146,6 +146,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_glib_logger();
     gtk::init()?;
 
+    let res_bytes = include_bytes!(concat!(env!("OUT_DIR"), "/helvum.gresource"));
+    let resource = adw::gio::Resource::from_data(&adw::glib::Bytes::from_static(res_bytes))?;
+    adw::gio::resources_register(&resource);
+
     // Aquire main context so that we can attach the gtk channel later.
     let ctx = glib::MainContext::default();
     let _guard = ctx.acquire().unwrap();

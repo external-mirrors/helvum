@@ -98,7 +98,7 @@ mod imp {
 
     /// Graphical representation of a pipewire port.
     #[derive(gtk::CompositeTemplate)]
-    #[template(file = "port.ui")]
+    #[template(resource = "/org/pipewire/Helvum/graph/port.ui")]
     pub struct Port {
         pub(super) pipewire_id: Cell<u32>,
         pub(super) media_type: Cell<PortMediaType>,

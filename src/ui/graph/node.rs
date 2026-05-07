@@ -30,7 +30,7 @@ mod imp {
 
     #[derive(glib::Properties, gtk::CompositeTemplate, Default)]
     #[properties(wrapper_type = super::Node)]
-    #[template(file = "node.ui")]
+    #[template(resource = "/org/pipewire/Helvum/graph/node.ui")]
     pub struct Node {
         #[property(get, set, construct_only)]
         pub(super) pipewire_id: Cell<u32>,

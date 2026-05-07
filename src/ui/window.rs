@@ -7,7 +7,7 @@ mod imp {
 
     #[derive(gtk::CompositeTemplate, glib::Properties)]
     #[properties(wrapper_type = super::Window)]
-    #[template(file = "window.ui")]
+    #[template(resource = "/org/pipewire/Helvum/window.ui")]
     pub struct Window {
         #[template_child]
         pub header_bar: TemplateChild<adw::HeaderBar>,
