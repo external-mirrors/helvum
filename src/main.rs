@@ -53,10 +53,7 @@ impl std::fmt::Display for LinkId {
 #[derive(Debug, Clone)]
 pub enum GtkMessage {
     /// Toggle a link between the two specified ports.
-    ToggleLink {
-        port_from: PortId,
-        port_to: PortId,
-    },
+    ToggleLink { port_from: PortId, port_to: PortId },
     /// Quit the event loop and let the thread finish.
     Terminate,
 }

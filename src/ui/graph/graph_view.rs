@@ -47,9 +47,9 @@ mod imp {
     use petgraph::stable_graph::{StableGraph, NodeIndex, EdgeIndex};
     use petgraph::Directed;
 
+    use crate::ui::graph::PortDirection;
     use adw::gtk::gdk;
     use libspa::param::format::MediaType;
-    use crate::ui::graph::PortDirection;
     use log::warn;
     use std::sync::LazyLock;
 

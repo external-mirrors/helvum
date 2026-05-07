@@ -180,9 +180,10 @@ pub(super) fn thread_main(
                     gtk_sender4
                         .send_blocking(match item {
                             Item::Node => PipewireMessage::NodeRemoved { id: NodeId(id) },
-                            Item::Port { node_id } => {
-                                PipewireMessage::PortRemoved { id: PortId(id), node_id }
-                            }
+                            Item::Port { node_id } => PipewireMessage::PortRemoved {
+                                id: PortId(id),
+                                node_id,
+                            },
                             Item::Link { .. } => PipewireMessage::LinkRemoved { id: LinkId(id) },
                         })
                         .expect("Failed to send message");
