@@ -5,7 +5,7 @@ The following describes the process of making a new release:
 1. In `data/org.pipewire.Helvum.metainfo.xml.in`,
    add a new `<release>` tag to the releases section with the appropriate version and date.
 
-2. In `meson.build` and `Cargo.toml`, bumb the projects version to the new version.
+2. In `meson.build` and `Cargo.toml`, bump the projects version to the new version.
 
 3. Ensure cargo dependencies are up-to-date by running `cargo outdated` (may require running `cargo install cargo-outdated`) and updating outdated dependencies (including the versions specified in `Cargo.lock`).
 
