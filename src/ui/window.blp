@@ -1,0 +1,39 @@
+using Gtk 4.0;
+using Adw 1;
+
+menu primary_menu {
+  item ("_About Helvum", "app.about")
+}
+
+template HelvumWindow : Adw.ApplicationWindow {
+  default-width: 1280;
+  default-height: 720;
+  title: "Helvum - Pipewire Patchbay";
+
+  Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar header_bar {
+      [end]
+      Gtk.MenuButton {
+        icon-name: "open-menu-symbolic";
+        menu-model: primary_menu;
+      }
+    }
+
+    content: Gtk.Box {
+      orientation: vertical;
+
+      Adw.Banner connection_banner {
+        title: _("Disconnected");
+        revealed: false;
+      }
+
+      Gtk.Overlay overlay {
+        Gtk.ScrolledWindow scrolled_window {
+          hexpand: true;
+          vexpand: true;
+        }
+      }
+    };
+  }
+}

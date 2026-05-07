@@ -1,0 +1,24 @@
+using Gtk 4.0;
+
+template HelvumZoomEntry : Box {
+  spacing: 12;
+
+  Gtk.Entry entry {
+    secondary-icon-name: "go-down-symbolic";
+    input-purpose: digits;
+    max-width-chars: 5;
+    styles ["osd", "rounded"]
+  }
+
+  Gtk.Button zoom_out_button {
+    icon-name: "zoom-out-symbolic";
+    tooltip-text: "Zoom out";
+    styles ["osd", "rounded"]
+  }
+
+  Gtk.Button zoom_in_button {
+    icon-name: "zoom-in-symbolic";
+    tooltip-text: "Zoom in";
+    styles ["osd", "rounded"]
+  }
+}

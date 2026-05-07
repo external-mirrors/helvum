@@ -107,7 +107,8 @@ mod imp {
         #[template_child]
         pub(super) label: TemplateChild<gtk::Label>,
         #[template_child]
-        pub(super) handle: TemplateChild<PortHandle>,
+        pub(super) handle_container: TemplateChild<gtk::Box>,
+        pub(super) handle: PortHandle,
     }
 
     impl Default for Port {
@@ -117,7 +118,8 @@ mod imp {
                 media_type: Cell::new(PortMediaType::Unknown),
                 direction: Cell::new(PortDirection::Output),
                 label: TemplateChild::default(),
-                handle: TemplateChild::default(),
+                handle_container: TemplateChild::default(),
+                handle: PortHandle::new(),
             }
         }
     }
@@ -142,6 +144,8 @@ mod imp {
     impl ObjectImpl for Port {
         fn constructed(&self) {
             self.parent_constructed();
+
+            self.handle_container.append(&self.handle);
 
             // Force left-to-right direction for the ports grid to avoid messed up UI when defaulting to right-to-left
             gtk::prelude::WidgetExt::set_direction(&*self.obj(), gtk::TextDirection::Ltr);

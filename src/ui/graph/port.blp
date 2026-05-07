@@ -1,0 +1,17 @@
+using Gtk 4.0;
+
+template HelvumPort : Widget {
+  hexpand: true;
+
+  Gtk.Label label {
+    wrap: true;
+    ellipsize: end;
+    lines: 2;
+    max-width-chars: 20;
+  }
+
+  Gtk.Box handle_container {
+    halign: center;
+    valign: center;
+  }
+}

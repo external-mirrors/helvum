@@ -1,0 +1,39 @@
+using Gtk 4.0;
+
+template HelvumNode : Widget {
+  styles ["card"]
+
+  Gtk.Box {
+    orientation: vertical;
+
+    Gtk.Box {
+      styles ["node-title"]
+      orientation: vertical;
+      spacing: 1;
+
+      Gtk.Label node_name {
+        styles ["heading"]
+        wrap: true;
+        ellipsize: end;
+        lines: 2;
+        max-width-chars: 20;
+      }
+
+      Gtk.Label media_name {
+        styles ["dim-label", "caption"]
+        visible: false;
+        wrap: true;
+        ellipsize: end;
+        lines: 2;
+        max-width-chars: 20;
+      }
+    }
+
+    Gtk.Separator separator {
+      /* The node will show the seperator only once ports are added to it */
+      visible: false;
+    }
+
+    Gtk.Grid port_grid {}
+  }
+}
