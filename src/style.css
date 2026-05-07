@@ -20,6 +20,11 @@
 @define-color media-type-midi    rgb(200,   0,  50);
 @define-color media-type-unknown rgb(128, 128, 128);
 
+.port-handle {
+    border-radius: 50%;
+    background-color: @media-type-unknown;
+}
+
 .audio {
     background: @media-type-audio;
     color: black;
@@ -36,8 +41,6 @@
 }
 
 node {
-    /* Compared to the default card color, this is not transparent in dark-mode
-       and provides a better contrast to the background in light mode */
 	background-color: @headerbar_bg_color;
 }
 
@@ -49,10 +52,6 @@ port label {
     padding: 4px 6px;
 }
 
-port-handle {
-    border-radius: 50%;
-    background-color: @media-type-unknown;
-}
 
 button.rounded {
     padding: 6px;

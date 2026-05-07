@@ -6,6 +6,8 @@ fn main() {
         "src/ui/graph/zoomentry.blp",
     ];
 
+    println!("cargo:warning=Helvum build script starting...");
+
     for blp in blp_files {
         let ui = blp.replace(".blp", ".ui");
         println!("cargo:rerun-if-changed={}", blp);

@@ -4,3 +4,5 @@
 /_build
 /target
 /*.Dockerfile
+src/ui/*.ui
+src/ui/graph/*.ui

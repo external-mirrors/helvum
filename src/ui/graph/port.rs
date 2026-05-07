@@ -25,7 +25,6 @@ pub use imp::{PortDirection, PortMediaType};
 use crate::PortId;
 use libspa::{param::format::MediaType, utils::Direction};
 
-use super::PortHandle;
 
 mod imp {
     use super::*;
@@ -107,8 +106,7 @@ mod imp {
         #[template_child]
         pub(super) label: TemplateChild<gtk::Label>,
         #[template_child]
-        pub(super) handle_container: TemplateChild<gtk::Box>,
-        pub(super) handle: PortHandle,
+        pub(super) handle: TemplateChild<gtk::Box>,
     }
 
     impl Default for Port {
@@ -118,8 +116,7 @@ mod imp {
                 media_type: Cell::new(PortMediaType::Unknown),
                 direction: Cell::new(PortDirection::Output),
                 label: TemplateChild::default(),
-                handle_container: TemplateChild::default(),
-                handle: PortHandle::new(),
+                handle: TemplateChild::default(),
             }
         }
     }
@@ -145,7 +142,8 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
 
-            self.handle_container.append(&self.handle);
+            self.handle.add_css_class("port-handle");
+            self.handle.set_size_request(14, 14);
 
             // Force left-to-right direction for the ports grid to avoid messed up UI when defaulting to right-to-left
             gtk::prelude::WidgetExt::set_direction(&*self.obj(), gtk::TextDirection::Ltr);
