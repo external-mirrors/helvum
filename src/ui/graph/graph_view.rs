@@ -39,9 +39,9 @@ mod imp {
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
 
+    use crate::ui::graph::PortDirection;
     use adw::gtk::gdk;
     use libspa::param::format::MediaType;
-    use crate::ui::graph::PortDirection;
     use log::warn;
     use std::sync::LazyLock;
 

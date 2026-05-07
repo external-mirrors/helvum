@@ -139,7 +139,10 @@ mod imp {
             let items = self.items.borrow();
 
             let Some(node) = items.get(&id.0) else {
-                log::warn!("Node (id: {}) for changed name not found in graph manager", id.0);
+                log::warn!(
+                    "Node (id: {}) for changed name not found in graph manager",
+                    id.0
+                );
                 return;
             };
             let Some(node) = node.dynamic_cast_ref::<graph::Node>() else {
@@ -196,7 +199,10 @@ mod imp {
                 return;
             };
             let Ok(node) = node.clone().dynamic_cast::<graph::Node>() else {
-                log::warn!("Graph Manager item under node id {} is not a node", node_id.0);
+                log::warn!(
+                    "Graph Manager item under node id {} is not a node",
+                    node_id.0
+                );
                 return;
             };
 
@@ -231,7 +237,10 @@ mod imp {
             let items = self.items.borrow();
 
             let Some(port) = items.get(&id.0) else {
-                log::warn!("Port (id: {}) for changed media type not found in graph manager", id.0);
+                log::warn!(
+                    "Port (id: {}) for changed media type not found in graph manager",
+                    id.0
+                );
                 return;
             };
             let Some(port) = port.dynamic_cast_ref::<graph::Port>() else {
@@ -245,16 +254,27 @@ mod imp {
         /// Remove the port with the id `id` from the node with the id `node_id`
         /// from the view.
         fn remove_port(&self, id: PortId, node_id: NodeId) {
-            log::info!("Removing port from graph: id {}, node_id: {}", id.0, node_id.0);
+            log::info!(
+                "Removing port from graph: id {}, node_id: {}",
+                id.0,
+                node_id.0
+            );
 
             let mut items = self.items.borrow_mut();
 
             let Some(node) = items.get(&node_id.0) else {
-                log::warn!("Node (id: {}) for port (id: {}) not found in graph manager", node_id.0, id.0);
+                log::warn!(
+                    "Node (id: {}) for port (id: {}) not found in graph manager",
+                    node_id.0,
+                    id.0
+                );
                 return;
             };
             let Ok(node) = node.clone().dynamic_cast::<graph::Node>() else {
-                log::warn!("Graph Manager item under node id {} is not a node", node_id.0);
+                log::warn!(
+                    "Graph Manager item under node id {} is not a node",
+                    node_id.0
+                );
                 return;
             };
             let Some(port) = items.remove(&id.0) else {
@@ -293,19 +313,33 @@ mod imp {
             }
 
             let Some(output_port) = items.get(&output_port_id.0) else {
-                log::warn!("Output port (id: {}) for link (id: {}) not found in graph manager", output_port_id.0, id.0);
+                log::warn!(
+                    "Output port (id: {}) for link (id: {}) not found in graph manager",
+                    output_port_id.0,
+                    id.0
+                );
                 return;
             };
             let Ok(output_port) = output_port.clone().dynamic_cast::<graph::Port>() else {
-                log::warn!("Graph Manager item under port id {} is not a port", output_port_id.0);
+                log::warn!(
+                    "Graph Manager item under port id {} is not a port",
+                    output_port_id.0
+                );
                 return;
             };
             let Some(input_port) = items.get(&input_port_id.0) else {
-                log::warn!("Output port (id: {}) for link (id: {}) not found in graph manager", input_port_id.0, id.0);
+                log::warn!(
+                    "Output port (id: {}) for link (id: {}) not found in graph manager",
+                    input_port_id.0,
+                    id.0
+                );
                 return;
             };
             let Ok(input_port) = input_port.clone().dynamic_cast::<graph::Port>() else {
-                log::warn!("Graph Manager item under port id {} is not a port", input_port_id.0);
+                log::warn!(
+                    "Graph Manager item under port id {} is not a port",
+                    input_port_id.0
+                );
                 return;
             };
 
@@ -350,7 +384,10 @@ mod imp {
             let items = self.items.borrow();
 
             let Some(link) = items.get(&id.0) else {
-                log::warn!("Link (id: {}) for changed media type not found in graph manager", id.0);
+                log::warn!(
+                    "Link (id: {}) for changed media type not found in graph manager",
+                    id.0
+                );
                 return;
             };
             let Some(link) = link.dynamic_cast_ref::<graph::Link>() else {
