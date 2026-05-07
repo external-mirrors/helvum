@@ -25,7 +25,6 @@ use adw::{
 pub use imp::{PortDirection, PortMediaType};
 use libspa::{param::format::MediaType, utils::Direction};
 
-
 mod imp {
     use super::*;
 

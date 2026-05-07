@@ -14,7 +14,7 @@ fn main() {
     for blp in blp_files {
         let blp_abs = std::path::Path::new(&root).join(blp);
         let ui_abs = blp_abs.with_extension("ui");
-        
+
         println!("cargo:rerun-if-changed={}", blp_abs.display());
 
         let output = std::process::Command::new("blueprint-compiler")
@@ -26,7 +26,11 @@ fn main() {
             .expect("Failed to run blueprint-compiler");
 
         if !output.status.success() {
-            panic!("Failed to compile blueprint {}: {}", blp, String::from_utf8_lossy(&output.stderr));
+            panic!(
+                "Failed to compile blueprint {}: {}",
+                blp,
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 
@@ -43,6 +47,9 @@ fn main() {
         .expect("Failed to run glib-compile-resources");
 
     if !output.status.success() {
-        panic!("Failed to compile gresource: {}", String::from_utf8_lossy(&output.stderr));
+        panic!(
+            "Failed to compile gresource: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

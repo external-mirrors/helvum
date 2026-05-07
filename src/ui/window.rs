@@ -66,7 +66,7 @@ mod imp {
             self.parent_constructed();
 
             self.scrolled_window.set_child(Some(&self.graph));
-            
+
             self.zoom_entry.set_halign(gtk::Align::End);
             self.zoom_entry.set_valign(gtk::Align::End);
             self.zoom_entry.set_margin_end(24);
