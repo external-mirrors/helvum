@@ -47,6 +47,8 @@
         <kudo>HiDpiIcon</kudo>
         <kudo>ModernToolkit</kudo>
     </kudos>
-    <developer_name>Tom A. Wagner</developer_name>
+    <developer id="org.pipewire.helvum">
+        <name>Tom A. Wagner, Naveen Prashanth</name>
+    </developer>
     <update_contact>tom.a.wagner@protonmail.com</update_contact>
 </component>
