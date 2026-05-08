@@ -3,6 +3,7 @@
 /.vscode
 /_build
 /target
-/*.Dockerfile
-src/ui/*.ui
-src/ui/graph/*.ui
+**/*.Dockerfile
+/docker-compose.*.yml
+*.sh
+**/*.ui
