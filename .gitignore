@@ -4,3 +4,5 @@
 /_build
 /target
 /*.Dockerfile
+/docker-compose.*.yml
+*.sh
