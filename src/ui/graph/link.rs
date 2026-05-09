@@ -30,7 +30,9 @@ mod imp {
         pub output_port: glib::WeakRef<Port>,
         pub input_port: glib::WeakRef<Port>,
         pub active: Cell<bool>,
+        pub online: Cell<bool>,
         pub media_type: Cell<PortMediaType>,
+        pub pending_check: Cell<bool>,
     }
 
     impl Default for Link {
@@ -39,7 +41,9 @@ mod imp {
                 output_port: glib::WeakRef::default(),
                 input_port: glib::WeakRef::default(),
                 active: Cell::default(),
+                online: Cell::new(true),
                 media_type: Cell::new(PortMediaType::Unknown),
+                pending_check: Cell::new(false),
             }
         }
     }
@@ -65,6 +69,14 @@ mod imp {
                         .default_value(false)
                         .flags(glib::ParamFlags::READWRITE)
                         .build(),
+                    glib::ParamSpecBoolean::builder("online")
+                        .default_value(true)
+                        .flags(glib::ParamFlags::READWRITE)
+                        .build(),
+                    glib::ParamSpecBoolean::builder("pending-check")
+                        .default_value(false)
+                        .flags(glib::ParamFlags::READWRITE)
+                        .build(),
                     glib::ParamSpecEnum::builder::<PortMediaType>("media-type")
                         .flags(glib::ParamFlags::READWRITE)
                         .build(),
@@ -79,6 +91,8 @@ mod imp {
                 "output-port" => self.output_port.upgrade().to_value(),
                 "input-port" => self.input_port.upgrade().to_value(),
                 "active" => self.active.get().to_value(),
+                "online" => self.online.get().to_value(),
+                "pending-check" => self.pending_check.get().to_value(),
                 "media-type" => self.media_type.get().to_value(),
                 _ => unimplemented!(),
             }
@@ -89,6 +103,8 @@ mod imp {
                 "output-port" => self.output_port.set(value.get().unwrap()),
                 "input-port" => self.input_port.set(value.get().unwrap()),
                 "active" => self.active.set(value.get().unwrap()),
+                "online" => self.online.set(value.get().unwrap()),
+                "pending-check" => self.pending_check.set(value.get().unwrap()),
                 "media-type" => self
                     .media_type
                     .set(value.get().expect("Value should be a PortMediaType")),
@@ -131,12 +147,28 @@ impl Link {
         self.set_property("active", active);
     }
 
+    pub fn online(&self) -> bool {
+        self.property("online")
+    }
+
+    pub fn set_online(&self, online: bool) {
+        self.set_property("online", online);
+    }
+
     pub fn media_type(&self) -> PortMediaType {
         self.property("media-type")
     }
 
     pub fn set_media_type(&self, media_type: MediaType) {
         self.set_property("media-type", PortMediaType::from(media_type))
+    }
+
+    pub fn pending_check(&self) -> bool {
+        self.property("pending-check")
+    }
+
+    pub fn set_pending_check(&self, pending: bool) {
+        self.set_property("pending-check", pending);
     }
 }
 

@@ -125,6 +125,9 @@ pub(super) fn thread_main(
             GtkMessage::ToggleLink { port_from, port_to } => {
                 toggle_link(port_from, port_to, &core2, &registry2, &state2)
             }
+            GtkMessage::EnsureLink { port_from, port_to } => {
+                ensure_link(port_from, port_to, &core2, &registry2, &state2)
+            }
             GtkMessage::Terminate => {
                 is_stopped2.set(true);
                 ml3.quit();
@@ -225,6 +228,10 @@ fn handle_node(
         .expect("Node object is missing properties");
 
     let name = get_node_name(props).to_string();
+    let internal_name = props
+        .get(&pipewire::keys::NODE_NAME)
+        .unwrap_or(&name)
+        .to_string();
     let media_class = |class: &str| {
         if class.contains("Sink") || class.contains("Input") {
             Some(NodeType::Input)
@@ -252,6 +259,7 @@ fn handle_node(
         .send_blocking(PipewireMessage::NodeAdded {
             id: NodeId(node.id),
             name,
+            internal_name,
             node_type,
         })
         .expect("Failed to send message");
@@ -509,12 +517,14 @@ fn toggle_link(
             port_from.0, port_to.0
         );
 
-        let node_from = state
-            .get_node_of_port(port_from)
-            .expect("Requested port not in state");
-        let node_to = state
-            .get_node_of_port(port_to)
-            .expect("Requested port not in state");
+        let Some(node_from) = state.get_node_of_port(port_from) else {
+            warn!("Requested port {} not in state", port_from);
+            return;
+        };
+        let Some(node_to) = state.get_node_of_port(port_to) else {
+            warn!("Requested port {} not in state", port_to);
+            return;
+        };
 
         if let Err(e) = core.create_object::<Link>(
             "link-factory",
@@ -538,3 +548,46 @@ fn get_link_media_type(link_info: &pipewire::link::LinkInfoRef) -> MediaType {
         .map(|(media_type, _media_subtype)| media_type)
         .unwrap_or(MediaType::Unknown)
 }
+
+/// Ensure a link exists between the two specified ports.
+fn ensure_link(
+    port_from: PortId,
+    port_to: PortId,
+    core: &CoreRc,
+    _registry: &RegistryRc,
+    state: &Rc<RefCell<State>>,
+) {
+    let state_borrow = state.borrow();
+    if state_borrow.get_link_id(port_from, port_to).is_some() {
+        log::info!("Link from port {} to {} already exists, skipping ensure_link", port_from, port_to);
+        return;
+    }
+
+    log::info!(
+        "Requesting creation of link from port id:{} to port id:{}",
+        port_from.0, port_to.0
+    );
+
+    let Some(node_from) = state_borrow.get_node_of_port(port_from) else {
+        log::warn!("Requested port {} not in state", port_from);
+        return;
+    };
+    let Some(node_to) = state_borrow.get_node_of_port(port_to) else {
+        log::warn!("Requested port {} not in state", port_to);
+        return;
+    };
+
+    if let Err(e) = core.create_object::<Link>(
+        "link-factory",
+        &pipewire::properties::properties! {
+            "link.output.node" => node_from.to_string(),
+            "link.output.port" => port_from.to_string(),
+            "link.input.node" => node_to.to_string(),
+            "link.input.port" => port_to.to_string(),
+            "object.linger" => "1"
+        },
+    ) {
+        log::warn!("Failed to create link: {}", e);
+    }
+}
+

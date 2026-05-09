@@ -32,8 +32,12 @@ mod imp {
     #[properties(wrapper_type = super::Node)]
     #[template(resource = "/org/pipewire/Helvum/graph/node.ui")]
     pub struct Node {
-        #[property(get, set, construct_only)]
+        #[property(get, set)]
         pub(super) pipewire_id: Cell<u32>,
+        #[property(get, set)]
+        pub(super) online: Cell<bool>,
+        #[property(get, set)]
+        pub(super) internal_name: RefCell<String>,
         #[property(
             name = "node-name", type = String,
             get = |this: &Self| this.node_name.text().to_string(),
@@ -158,10 +162,6 @@ impl Node {
             .build()
     }
 
-    pub fn pw_id(&self) -> NodeId {
-        NodeId(self.property("pipewire-id"))
-    }
-
     pub fn add_port(&self, port: Port) {
         let imp = self.imp();
         imp.ports.borrow_mut().insert(port);
@@ -175,5 +175,9 @@ impl Node {
         } else {
             log::warn!("Tried to remove non-existant port widget from node");
         }
+    }
+
+    pub fn ports(&self) -> Vec<Port> {
+        self.imp().ports.borrow().iter().cloned().collect()
     }
 }

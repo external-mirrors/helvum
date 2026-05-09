@@ -26,7 +26,10 @@ use adw::{
     subclass::prelude::*,
 };
 
+use petgraph::stable_graph::StableGraph;
 use petgraph::visit::{Bfs, EdgeRef, IntoEdgeReferences, IntoNodeReferences, Reversed};
+use petgraph::Directed;
+use std::cell::RefCell;
 use std::cmp::Ordering;
 
 use super::{Link, Node, Port};
@@ -42,9 +45,8 @@ pub struct NodeWeight {
 mod imp {
     use super::*;
 
-    use petgraph::stable_graph::{EdgeIndex, NodeIndex, StableGraph};
-    use petgraph::Directed;
-    use std::cell::{Cell, RefCell};
+    use petgraph::stable_graph::{EdgeIndex, NodeIndex};
+    use std::cell::Cell;
     use std::collections::{HashMap, HashSet};
 
     use crate::ui::graph::PortDirection;
@@ -82,7 +84,7 @@ mod imp {
 
     pub struct GraphView {
         /// Stores the topological graph.
-        pub(super) graph: RefCell<StableGraph<NodeWeight, Link, Directed>>,
+        pub(crate) graph: RefCell<StableGraph<NodeWeight, Link, Directed>>,
         /// Fast lookup for nodes.
         pub(super) node_to_index: RefCell<HashMap<Node, NodeIndex>>,
         /// Fast lookup for links.
@@ -273,7 +275,13 @@ mod imp {
 
                 if is_visible {
                     let is_highlighted = !is_any_highlighted || highlighted_nodes.contains(&idx);
-                    if is_highlighted {
+                    let is_online = node.online();
+
+                    if !is_online {
+                        snapshot.push_opacity(0.15);
+                        widget.snapshot_child(node, snapshot);
+                        snapshot.pop();
+                    } else if is_highlighted {
                         widget.snapshot_child(node, snapshot);
                     } else {
                         snapshot.push_opacity(0.3);
@@ -288,7 +296,7 @@ mod imp {
     }
 
     impl ScrollableImpl for GraphView {}
-
+ 
     impl GraphView {
         /// Returns a [`gsk::Transform`] matrix that can translate from canvas space to screen space.
         ///
@@ -606,6 +614,7 @@ mod imp {
             output_anchor: &Point,
             input_anchor: &Point,
             active: bool,
+            online: bool,
             color: &gdk::RGBA,
         ) {
             let output_x = output_anchor.x();
@@ -641,15 +650,22 @@ mod imp {
             );
 
             let path = builder.to_path();
+
+            let color = if online {
+                color.clone()
+            } else {
+                gdk::RGBA::new(0.5, 0.5, 0.5, 1.0)
+            };
+
             let stroke_width = f32::max(1.0, 2.0 * zoom);
             let stroke = gsk::Stroke::new(stroke_width);
 
-            // Use dashed line for inactive links, full line otherwise.
-            if !active {
+            // Use dashed line for inactive or offline links, full line otherwise.
+            if !active || !online {
                 stroke.set_dash(&[10.0 * zoom, 5.0 * zoom]);
             }
 
-            snapshot.append_stroke(&path, &stroke, color);
+            snapshot.append_stroke(&path, &stroke, &color);
         }
 
         fn draw_dragged_link(&self, port: &Port, snapshot: &gtk::Snapshot, colors: &Colors) {
@@ -686,7 +702,7 @@ mod imp {
 
             let color = &colors.color_for_media_type(media_type);
 
-            self.draw_link(snapshot, output_anchor, input_anchor, false, color);
+            self.draw_link(snapshot, output_anchor, input_anchor, false, true, color);
         }
 
         fn snapshot_links(
@@ -711,6 +727,10 @@ mod imp {
 
             for edge in graph.edge_references() {
                 let link = edge.weight();
+
+                if link.pending_check() {
+                    continue;
+                }
 
                 let (source, target) = graph.edge_endpoints(edge.id()).unwrap();
                 let source_nw = &graph[source];
@@ -750,6 +770,7 @@ mod imp {
                         &output_anchor,
                         &input_anchor,
                         link.active(),
+                        link.online(),
                         color,
                     );
                 } else {
@@ -759,6 +780,7 @@ mod imp {
                         &output_anchor,
                         &input_anchor,
                         link.active(),
+                        link.online(),
                         color,
                     );
                     snapshot.pop();
@@ -840,6 +862,12 @@ mod imp {
 glib::wrapper! {
     pub struct GraphView(ObjectSubclass<imp::GraphView>)
         @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Scrollable;
+}
+
+impl GraphView {
+    pub(crate) fn graph(&self) -> &RefCell<StableGraph<NodeWeight, Link, Directed>> {
+        &self.imp().graph
+    }
 }
 
 impl GraphView {

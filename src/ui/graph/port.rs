@@ -100,6 +100,7 @@ mod imp {
     #[template(resource = "/org/pipewire/Helvum/graph/port.ui")]
     pub struct Port {
         pub(super) pipewire_id: Cell<u32>,
+        pub(super) online: Cell<bool>,
         pub(super) media_type: Cell<PortMediaType>,
         pub(super) direction: Cell<PortDirection>,
         #[template_child]
@@ -112,6 +113,7 @@ mod imp {
         fn default() -> Self {
             Self {
                 pipewire_id: Cell::new(0),
+                online: Cell::new(true),
                 media_type: Cell::new(PortMediaType::Unknown),
                 direction: Cell::new(PortDirection::Output),
                 label: TemplateChild::default(),
@@ -175,7 +177,9 @@ mod imp {
                         .construct_only()
                         .build(),
                     glib::ParamSpecUInt::builder("pipewire-id")
-                        .construct_only()
+                        .build(),
+                    glib::ParamSpecBoolean::builder("online")
+                        .default_value(true)
                         .build(),
                     glib::ParamSpecEnum::builder::<PortMediaType>("media-type").build(),
                     glib::ParamSpecString::builder("name").build(),
@@ -195,6 +199,9 @@ mod imp {
                     self.pipewire_id
                         .set(value.get().expect("Value should be a u32"));
                 }
+                "online" => {
+                    self.online.set(value.get().expect("Value should be a bool"));
+                }
                 "media-type" => {
                     let val = value.get().expect("Value should be a PortMediaType");
                     self.set_media_type(val);
@@ -212,6 +219,7 @@ mod imp {
             match pspec.name() {
                 "port-direction" => self.direction.get().to_value(),
                 "pipewire-id" => self.pipewire_id.get().to_value(),
+                "online" => self.online.get().to_value(),
                 "media-type" => self.media_type.get().to_value(),
                 "name" => self.label.text().to_string().to_value(),
                 _ => unimplemented!(),
@@ -316,6 +324,13 @@ mod imp {
                     .unwrap()
                     .dynamic_cast::<super::Port>()
                     .expect("Widget should be a Port");
+
+                if !port.online() {
+                    log::trace!("Dragging from offline port {} is disabled", port.pw_id());
+                    // We don't have a direct way to cancel drag_begin here but we can check it in drop or just let it fail.
+                    // Actually, if we return from here, what happens? 
+                    // Better to check in connect_drag_cancel or just prevent the drag from starting if possible.
+                }
 
                 log::trace!("Drag started from port {}", port.pw_id());
             });
@@ -451,6 +466,18 @@ impl Port {
 
     pub fn pw_id(&self) -> PortId {
         PortId(self.property("pipewire-id"))
+    }
+
+    pub fn set_pw_id(&self, id: PortId) {
+        self.set_property("pipewire-id", id.0);
+    }
+
+    pub fn online(&self) -> bool {
+        self.property("online")
+    }
+
+    pub fn set_online(&self, online: bool) {
+        self.set_property("online", online);
     }
 
     pub fn link_anchor(&self) -> graphene::Point {

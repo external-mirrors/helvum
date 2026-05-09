@@ -54,6 +54,8 @@ impl std::fmt::Display for LinkId {
 pub enum GtkMessage {
     /// Toggle a link between the two specified ports.
     ToggleLink { port_from: PortId, port_to: PortId },
+    /// Ensure a link exists between the two specified ports (don't delete if it already exists).
+    EnsureLink { port_from: PortId, port_to: PortId },
     /// Quit the event loop and let the thread finish.
     Terminate,
 }
@@ -64,6 +66,7 @@ pub enum PipewireMessage {
     NodeAdded {
         id: NodeId,
         name: String,
+        internal_name: String,
         node_type: Option<NodeType>,
     },
     NodeNameChanged {

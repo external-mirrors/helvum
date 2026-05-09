@@ -23,7 +23,7 @@ use crate::{ui::graph::GraphView, GtkMessage, PipewireMessage};
 mod imp {
     use super::*;
 
-    use std::{cell::OnceCell, cell::RefCell, collections::HashMap};
+    use std::{cell::OnceCell, cell::RefCell, collections::HashMap, collections::HashSet};
 
     use crate::{ui::graph, LinkId, MediaType, NodeId, NodeType, PortId};
 
@@ -38,6 +38,10 @@ mod imp {
 
         pub pw_sender: OnceCell<PwSender<crate::GtkMessage>>,
         pub items: RefCell<HashMap<u32, glib::Object>>,
+        /// Nodes that have been removed and are waiting to be revived.
+        pub(super) offline_nodes: RefCell<HashMap<String, graph::Node>>,
+        /// Links that were manually deleted by the user and should not be ghosted.
+        pub(super) pending_deletions: RefCell<HashSet<String>>,
     }
 
     #[glib::object_subclass]
@@ -60,8 +64,9 @@ mod imp {
                         PipewireMessage::NodeAdded {
                             id,
                             name,
+                            internal_name,
                             node_type,
-                        } => imp.add_node(id, name.as_str(), node_type),
+                        } => imp.add_node(id, name.as_str(), internal_name.as_str(), node_type),
                         PipewireMessage::NodeNameChanged {
                             id,
                             name,
@@ -117,21 +122,33 @@ mod imp {
         }
 
         /// Add a new node to the view.
-        fn add_node(&self, id: NodeId, name: &str, node_type: Option<NodeType>) {
-            log::info!("Adding node to graph: id {}", id.0);
-
+        fn add_node(&self, id: NodeId, name: &str, internal_name: &str, node_type: Option<NodeType>) {
             let mut items = self.items.borrow_mut();
+            let mut offline_nodes = self.offline_nodes.borrow_mut();
+
             if let Some(old_item) = items.get(&id.0) {
                 if let Ok(old_node) = old_item.clone().dynamic_cast::<graph::Node>() {
                     self.graph_view().remove_node(&old_node);
                 }
             }
 
+            if let Some(node) = offline_nodes.remove(internal_name) {
+                log::info!("Reviving offline node: {} ({})", name, internal_name);
+                node.set_pipewire_id(id.0);
+                node.set_online(true);
+                items.insert(id.0, node.upcast());
+                self.graph_view().queue_draw();
+                return;
+            }
+
+            log::info!("Adding new node: {} ({})", name, internal_name);
             let node = graph::Node::new(name, id);
+            node.set_internal_name(internal_name.to_string());
+            node.set_online(true);
 
-            items.insert(id.0, node.clone().upcast());
-
-            self.graph_view().add_node(node, node_type);
+            self.graph_view().add_node(node.clone(), node_type);
+            items.insert(id.0, node.upcast());
+            self.graph_view().queue_draw();
         }
 
         /// Update a node tooltip to the view.
@@ -158,16 +175,24 @@ mod imp {
         fn remove_node(&self, id: NodeId) {
             log::info!("Removing node from graph: id {}", id.0);
 
-            let Some(node) = self.items.borrow_mut().remove(&id.0) else {
+            let mut items = self.items.borrow_mut();
+            let mut offline_nodes = self.offline_nodes.borrow_mut();
+
+            let Some(item) = items.remove(&id.0) else {
                 log::warn!("Unknown node (id={}) removed from graph", id.0);
                 return;
             };
-            let Ok(node) = node.dynamic_cast::<graph::Node>() else {
+            let Ok(node) = item.dynamic_cast::<graph::Node>() else {
                 log::warn!("Graph Manager item under node id {} is not a node", id.0);
                 return;
             };
 
-            self.graph_view().remove_node(&node);
+            node.set_online(false);
+            for port in node.ports() {
+                port.set_online(false);
+            }
+            offline_nodes.insert(node.internal_name(), node);
+            self.graph_view().queue_draw();
         }
 
         /// Add a new port to the view.
@@ -206,7 +231,25 @@ mod imp {
                 return;
             };
 
+            let port = {
+                let ports = node.ports();
+                ports.into_iter().find(|p| p.name() == name)
+            };
+
+            if let Some(port) = port {
+                log::info!("Reviving offline port: {} on node {}", name, node_id.0);
+                port.set_pw_id(id);
+                port.set_online(true);
+                
+                self.restore_links_for_port(&port);
+                items.insert(id.0, port.upcast());
+                
+                self.graph_view().queue_draw();
+                return;
+            }
+
             let port = graph::Port::new(id, name, direction);
+            port.set_online(true);
 
             // Create or delete a link if the widget emits the "port-toggled" signal.
             port.connect_local(
@@ -231,6 +274,7 @@ mod imp {
             items.insert(id.0, port.clone().upcast());
 
             node.add_port(port);
+            self.graph_view().queue_draw();
         }
 
         fn port_media_type_changed(&self, id: PortId, media_type: MediaType) {
@@ -262,31 +306,17 @@ mod imp {
 
             let mut items = self.items.borrow_mut();
 
-            let Some(node) = items.get(&node_id.0) else {
-                log::warn!(
-                    "Node (id: {}) for port (id: {}) not found in graph manager",
-                    node_id.0,
-                    id.0
-                );
-                return;
-            };
-            let Ok(node) = node.clone().dynamic_cast::<graph::Node>() else {
-                log::warn!(
-                    "Graph Manager item under node id {} is not a node",
-                    node_id.0
-                );
-                return;
-            };
-            let Some(port) = items.remove(&id.0) else {
+            let Some(item) = items.remove(&id.0) else {
                 log::warn!("Unknown Port (id: {}) removed from graph", id.0);
                 return;
             };
-            let Ok(port) = port.dynamic_cast::<graph::Port>() else {
+            let Ok(port) = item.dynamic_cast::<graph::Port>() else {
                 log::warn!("Graph Manager item under port id {} is not a port", id.0);
                 return;
             };
 
-            node.remove_port(&port);
+            port.set_online(false);
+            self.graph_view().queue_draw();
         }
 
         /// Add a new link to the view.
@@ -343,20 +373,37 @@ mod imp {
                 return;
             };
 
+            let link = {
+                let graph_view = self.graph_view();
+                let graph = graph_view.graph().borrow();
+                let found = graph.edge_weights().find(|l| {
+                    l.output_port().as_ref() == Some(&output_port) && l.input_port().as_ref() == Some(&input_port)
+                }).cloned();
+                found
+            };
+
+            if let Some(link) = link {
+                log::info!("Reviving offline link: id {}", id.0);
+                link.set_active(active);
+                link.set_online(true);
+                link.set_media_type(media_type);
+                items.insert(id.0, link.upcast());
+                self.graph_view().queue_draw();
+                return;
+            }
+
             let link = graph::Link::new();
             link.set_output_port(Some(&output_port));
             link.set_input_port(Some(&input_port));
             link.set_active(active);
+            link.set_online(true);
             link.set_media_type(media_type);
 
             items.insert(id.0, link.clone().upcast());
 
             // Update graph to contain the new link.
-            self.graph
-                .borrow()
-                .as_ref()
-                .expect("graph should be set")
-                .add_link(link);
+            self.graph_view().add_link(link);
+            self.graph_view().queue_draw();
         }
 
         fn link_state_changed(&self, id: LinkId, active: bool) {
@@ -398,31 +445,156 @@ mod imp {
         }
 
         // Toggle a link between the two specified ports on the remote pipewire server.
+        // If it's a ghost link, we remove it from the graph.
+        // If it's an active link (or no link exists), we ask PipeWire to toggle it.
         fn toggle_link(&self, port_from: PortId, port_to: PortId) {
+            // If there's a ghost link between these ports, remove it from the graph instead of toggling PipeWire.
+            let items = self.items.borrow();
+            let port_from_widget = items.get(&port_from.0).and_then(|i| i.dynamic_cast_ref::<graph::Port>());
+            let port_to_widget = items.get(&port_to.0).and_then(|i| i.dynamic_cast_ref::<graph::Port>());
+
+            if let (Some(p1), Some(p2)) = (port_from_widget, port_to_widget) {
+                let graph_view = self.graph_view();
+                let graph = graph_view.graph().borrow();
+                
+                // Find any link between these ports
+                let found_link = graph.edge_weights().find(|l| {
+                    (l.output_port().as_ref() == Some(p1) && l.input_port().as_ref() == Some(p2)) ||
+                    (l.output_port().as_ref() == Some(p2) && l.input_port().as_ref() == Some(p1))
+                }).cloned();
+
+                if let Some(link) = found_link {
+                    if !link.online() {
+                        log::info!("Removing ghost link from graph (manual delete)");
+                        graph_view.remove_link(&link);
+                        graph_view.queue_draw();
+                        return;
+                    } else {
+                        // It's an active link, mark it for permanent removal when PipeWire confirms
+                        log::info!("Marking active link for permanent removal: {} -> {}", port_from.0, port_to.0);
+                        let key = if port_from.0 < port_to.0 {
+                            format!("{}-{}", port_from.0, port_to.0)
+                        } else {
+                            format!("{}-{}", port_to.0, port_from.0)
+                        };
+                        self.pending_deletions.borrow_mut().insert(key);
+                    }
+                }
+            }
+
+            self.request_link_toggle(port_from, port_to);
+        }
+
+        fn request_link_toggle(&self, port_from: PortId, port_to: PortId) {
             let sender = self.pw_sender.get().expect("pw_sender shoud be set");
             sender
                 .send(crate::GtkMessage::ToggleLink { port_from, port_to })
                 .expect("Failed to send message");
         }
 
-        /// Remove the link with the specified id from the view.
+        fn request_link_ensure(&self, port_from: PortId, port_to: PortId) {
+            let sender = self.pw_sender.get().expect("pw_sender shoud be set");
+            sender
+                .send(crate::GtkMessage::EnsureLink { port_from, port_to })
+                .expect("Failed to send message");
+        }
+
+        // Remove the link with the specified id from the view.
         fn remove_link(&self, id: LinkId) {
             log::info!("Removing link from graph: id {}", id.0);
 
-            let Some(link) = self.items.borrow_mut().remove(&id.0) else {
+            let mut items = self.items.borrow_mut();
+
+            let Some(item) = items.remove(&id.0) else {
                 log::warn!("Unknown Link (id={}) removed from graph", id.0);
                 return;
             };
-            let Ok(link) = link.dynamic_cast::<graph::Link>() else {
+            let Ok(link) = item.dynamic_cast::<graph::Link>() else {
                 log::warn!("Graph Manager item under link id {} is not a link", id.0);
                 return;
             };
 
-            self.graph_view().remove_link(&link);
+            // Check if this removal was initiated by the user in Helvum
+            let is_pending = if let (Some(out_p), Some(in_p)) = (link.output_port(), link.input_port()) {
+                let id1 = out_p.pw_id().0;
+                let id2 = in_p.pw_id().0;
+                let key = if id1 < id2 {
+                    format!("{}-{}", id1, id2)
+                } else {
+                    format!("{}-{}", id2, id1)
+                };
+                self.pending_deletions.borrow_mut().remove(&key)
+            } else {
+                false
+            };
+
+            if is_pending {
+                log::info!("Link removed manually by user (Helvum), deleting from graph (id={})", id.0);
+                self.graph_view().remove_link(&link);
+            } else {
+                let output_online = link.output_port().map(|p| p.online()).unwrap_or(false);
+                let input_online = link.input_port().map(|p| p.online()).unwrap_or(false);
+
+                if output_online && input_online {
+                    log::info!("Link removed while ports are online, deferring removal check (id={})", id.0);
+                    link.set_online(false);
+                    link.set_pending_check(true);
+                    
+                    let obj = self.obj().clone();
+                    let link_clone = link.clone();
+                    glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+                        let imp = obj.imp();
+                        let out_p = link_clone.output_port();
+                        let in_p = link_clone.input_port();
+                        
+                        let still_online = if let (Some(out_p), Some(in_p)) = (out_p, in_p) {
+                            out_p.online() && in_p.online()
+                        } else {
+                            false
+                        };
+
+                        if still_online {
+                            log::info!("Ports still online after 100ms, removing link permanently");
+                            imp.graph_view().remove_link(&link_clone);
+                            imp.graph_view().queue_draw();
+                        } else {
+                            log::info!("One port went offline, keeping link as ghost");
+                            link_clone.set_pending_check(false);
+                            imp.graph_view().queue_draw();
+                        }
+                        glib::ControlFlow::Break
+                    });
+                } else {
+                    log::info!("Link removed automatically (node offline), graying out (id={})", id.0);
+                    link.set_online(false);
+                }
+            }
+            self.graph_view().queue_draw();
+        }
+
+        fn restore_links_for_port(&self, port: &graph::Port) {
+            let graph_view = self.graph_view();
+            let graph = graph_view.graph().borrow();
+
+            for edge in graph.edge_indices() {
+                let link = &graph[edge];
+                let is_related = link.output_port().as_ref() == Some(port) || link.input_port().as_ref() == Some(port);
+                
+                if is_related && !link.online() {
+                    let out_p = link.output_port();
+                    let in_p = link.input_port();
+                    if let (Some(out_p), Some(in_p)) = (out_p, in_p) {
+                        log::info!("Restoring persistent link in PipeWire (ensure): {} -> {}", out_p.pw_id(), in_p.pw_id());
+                        self.request_link_ensure(out_p.pw_id(), in_p.pw_id());
+                    }
+                }
+            }
         }
 
         fn clear(&self) {
             self.items.borrow_mut().clear();
+            self.offline_nodes.borrow_mut().clear();
+            self.pending_deletions.borrow_mut().clear();
             self.graph_view().clear();
         }
     }
