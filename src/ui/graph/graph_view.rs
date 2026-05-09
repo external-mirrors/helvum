@@ -706,6 +706,8 @@ mod imp {
             };
 
             let graph = self.graph.borrow();
+            let highlighted_edges = self.highlighted_edges.borrow();
+            let is_any_highlighted = !self.highlighted_nodes.borrow().is_empty();
 
             for edge in graph.edge_references() {
                 let link = edge.weight();
@@ -741,13 +743,26 @@ mod imp {
                     continue;
                 };
 
-                self.draw_link(
-                    snapshot,
-                    &output_anchor,
-                    &input_anchor,
-                    link.active(),
-                    color,
-                );
+                let is_highlighted = !is_any_highlighted || highlighted_edges.contains(&edge.id());
+                if is_highlighted {
+                    self.draw_link(
+                        snapshot,
+                        &output_anchor,
+                        &input_anchor,
+                        link.active(),
+                        color,
+                    );
+                } else {
+                    snapshot.push_opacity(0.3);
+                    self.draw_link(
+                        snapshot,
+                        &output_anchor,
+                        &input_anchor,
+                        link.active(),
+                        color,
+                    );
+                    snapshot.pop();
+                }
             }
 
             if let Some(port) = self.dragged_port.upgrade() {

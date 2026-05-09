@@ -43,13 +43,22 @@ $ flatpak run org.pipewire.Helvum
 
 ## Manually
 
-For compilation, you will need:
-
 - **Meson** (>= 1.9.0)
 - **Rust Toolchain** (>= 1.94.0)
+- **Clang/LLVM** (required for `bindgen` to generate PipeWire bindings)
 - **GTK4** (>= 4.22.0) development packages
 - **libadwaita-1** (>= 1.9.0) development packages
 - **libpipewire-0.3** (>= 1.6.0) development packages and their dependencies
+
+### Distribution-specific dependencies
+
+| Distribution | Required Packages | Environment Variables |
+| :--- | :--- | :--- |
+| **Arch Linux** | `meson`, `rust`, `clang`, `gtk4`, `libadwaita`, `pipewire` | `LIBCLANG_PATH=/usr/lib` |
+| **Fedora** | `meson`, `rust`, `cargo`, `clang-devel`, `gtk4-devel`, `libadwaita-devel`, `pipewire-devel` | `LIBCLANG_PATH=/usr/lib64` |
+| **OpenSUSE** | `meson`, `rust`, `cargo`, `clang-devel`, `gtk4-devel`, `libadwaita-devel`, `pipewire-devel` | `LIBCLANG_PATH=/usr/lib64` |
+| **Debian/Ubuntu** | `meson`, `rustc`, `cargo`, `libclang-dev`, `libgtk-4-dev`, `libadwaita-1-dev`, `libpipewire-0.3-dev` | `LIBCLANG_PATH=/usr/lib/llvm-21/lib` (path may vary by LLVM version) |
+| **Alpine** | `meson`, `rust`, `cargo`, `clang-dev`, `clang-libclang`, `gtk4.0-dev`, `libadwaita-dev`, `pipewire-dev` | `LIBCLANG_PATH=/usr/lib` |
 
 To compile and install, run
 
