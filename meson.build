@@ -3,7 +3,7 @@ project(
   'rust',
   version: '0.6.1',
   license: 'GPL-3.0',
-  meson_version: '>=1.9.0',
+  meson_version: '>=1.8.0',
   default_options: [
     'warning_level=2',
     'buildtype=debugoptimized',
@@ -14,10 +14,10 @@ gnome = import('gnome')
 
 base_id = 'org.pipewire.Helvum'
 
-dependency('glib-2.0',     version: '>= 2.88.0')
-dependency('gtk4',         version: '>= 4.22.0')
-dependency('libadwaita-1', version: '>= 1.9.0')
-dependency('libpipewire-0.3', version: '>= 1.6.0')
+dependency('glib-2.0',     version: '>= 2.84.0')
+dependency('gtk4',         version: '>= 4.18.0')
+dependency('libadwaita-1', version: '>= 1.7.0')
+dependency('libpipewire-0.3', version: '>= 1.4.0')
 
 desktop_file_validate = find_program('desktop-file-validate', required: false)
 appstream_util = find_program('appstream-util', required: false)
