@@ -19,6 +19,8 @@ mod imp {
         #[template_child]
         pub zoom_in_button: TemplateChild<gtk::Button>,
         #[template_child]
+        pub recenter_button: TemplateChild<gtk::Button>,
+        #[template_child]
         pub entry: TemplateChild<gtk::Entry>,
         pub popover: gtk::PopoverMenu,
     }
@@ -38,6 +40,7 @@ mod imp {
 
             ZoomEntry {
                 graphview: Default::default(),
+                recenter_button: Default::default(),
                 zoom_out_button: Default::default(),
                 zoom_in_button: Default::default(),
                 entry: Default::default(),
@@ -64,6 +67,17 @@ mod imp {
     impl ObjectImpl for ZoomEntry {
         fn constructed(&self) {
             self.parent_constructed();
+
+            self.recenter_button.connect_clicked(clone!(
+                #[weak(rename_to = imp)]
+                self,
+                move |_| {
+                    let graphview = imp.graphview.borrow();
+                    if let Some(ref graphview) = *graphview {
+                        graphview.fit_to_content();
+                    }
+                }
+            ));
 
             self.zoom_out_button.connect_clicked(clone!(
                 #[weak(rename_to = imp)]

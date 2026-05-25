@@ -1,4 +1,4 @@
-use adw::{gio, gtk, prelude::*, subclass::prelude::*};
+use adw::{gio, glib, glib::clone, gtk, prelude::*, subclass::prelude::*};
 
 use super::graph;
 
@@ -21,12 +21,16 @@ mod imp {
 
         #[property(type = graph::GraphView, get = |this: &Self| this.graph.clone())]
         pub graph: graph::GraphView,
+        #[property(type = crate::ui::MatrixView, get = |this: &Self| this.matrix_view.clone())]
+        pub matrix_view: crate::ui::MatrixView,
+        pub is_matrix_view: std::cell::Cell<bool>,
         pub zoom_entry: graph::ZoomEntry,
     }
 
     impl Default for Window {
         fn default() -> Self {
             let graph = graph::GraphView::new();
+            let matrix_view = crate::ui::MatrixView::new();
             // We'll set the zoomed widget later in constructed
             let zoom_entry = glib::Object::new::<graph::ZoomEntry>();
 
@@ -36,6 +40,8 @@ mod imp {
                 overlay: TemplateChild::default(),
                 scrolled_window: TemplateChild::default(),
                 graph,
+                matrix_view,
+                is_matrix_view: std::cell::Cell::new(false),
                 zoom_entry,
             }
         }
@@ -50,6 +56,7 @@ mod imp {
         fn class_init(klass: &mut Self::Class) {
             // Ensure custom types are registered
             graph::GraphView::ensure_type();
+            crate::ui::MatrixView::ensure_type();
             graph::ZoomEntry::ensure_type();
 
             klass.bind_template();
@@ -88,9 +95,88 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget, gtk::Native, gtk::Root, gtk::ShortcutManager, gio::ActionGroup, gio::ActionMap;
 }
 
+use crate::application::Application;
+
 impl Window {
     pub fn new() -> Self {
         glib::Object::new()
+    }
+
+    pub fn setup_actions(&self) {
+        let save_action = gio::SimpleAction::new("save-preset", None);
+        save_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let dialog = gtk::FileDialog::new();
+                dialog.set_title("Save Preset");
+                dialog.set_initial_name(Some("preset.toml"));
+
+                dialog.save(Some(&window), gio::Cancellable::NONE, clone!(#[weak] window, move |res| {
+                    if let Ok(file) = res {
+                        if let Some(path) = file.path() {
+                            let path_str = path.to_string_lossy();
+                            let app = window.application().unwrap().dynamic_cast::<Application>().unwrap();
+                            let gm = app.imp().graph_manager.get().unwrap();
+                            if let Err(e) = gm.save_preset(&path_str) {
+                                log::error!("Failed to save preset: {}", e);
+                            }
+                        }
+                    }
+                }));
+            }
+        ));
+        self.add_action(&save_action);
+
+        let load_action = gio::SimpleAction::new("load-preset", None);
+        load_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let dialog = gtk::FileDialog::new();
+                dialog.set_title("Load Preset");
+
+                dialog.open(Some(&window), gio::Cancellable::NONE, clone!(#[weak] window, move |res| {
+                    if let Ok(file) = res {
+                        if let Some(path) = file.path() {
+                            let path_str = path.to_string_lossy();
+                            let app = window.application().unwrap().dynamic_cast::<Application>().unwrap();
+                            let gm = app.imp().graph_manager.get().unwrap();
+                            if let Err(e) = gm.load_preset(&path_str) {
+                                log::error!("Failed to load preset: {}", e);
+                            }
+                        }
+                    }
+                }));
+            }
+        ));
+        self.add_action(&load_action);
+
+        let toggle_view_action = gio::SimpleAction::new("toggle-view", None);
+        toggle_view_action.connect_activate(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let imp = window.imp();
+                let is_matrix = imp.is_matrix_view.get();
+                if is_matrix {
+                    imp.scrolled_window.set_child(Some(&imp.graph));
+                    imp.is_matrix_view.set(false);
+                } else {
+                    imp.scrolled_window.set_child(Some(&imp.matrix_view));
+                    imp.is_matrix_view.set(true);
+                    
+                    if let Some(app) = window.application() {
+                        if let Ok(app) = app.downcast::<Application>() {
+                            if let Some(gm) = app.imp().graph_manager.get() {
+                                gm.force_matrix_update();
+                            }
+                        }
+                    }
+                }
+            }
+        ));
+        self.add_action(&toggle_view_action);
     }
 }
 

@@ -69,3 +69,79 @@ entry.rounded > :first-child {
 entry.rounded > :nth-child(2) {
     padding-right: 12px;
 }
+
+.node-actions {
+    opacity: 0;
+    transition: opacity 0.15s ease-in-out;
+    background-color: alpha(@headerbar_bg_color, 0.9);
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+HelvumNode:hover .node-actions {
+    opacity: 1;
+}
+
+.node-actions button {
+    border-radius: 6px;
+    padding: 2px;
+}
+
+.node-actions button.error {
+    color: @error_color;
+}
+
+button.mini {
+    padding: 1px 4px;
+    min-height: 20px;
+    min-width: 20px;
+}
+
+togglebutton.flat:checked {
+    background-color: @success_bg_color;
+    color: @success_fg_color;
+}
+
+.dim-label.caption.heading {
+    font-weight: bold;
+    color: @accent_color;
+}
+
+.sub-node-frame {
+    border: 1px solid alpha(@borders, 0.5);
+    border-radius: 6px;
+    background-color: alpha(@headerbar_bg_color, 0.3);
+}
+
+.sub-node.offline {
+    opacity: 0.5;
+    filter: grayscale(100%);
+}
+
+.sub-node-frame label {
+    font-weight: bold;
+}
+
+.sub-canvas {
+    background-color: alpha(black, 0.1);
+    border-radius: 8px;
+    border: 1px solid alpha(@borders, 0.3);
+    margin: 4px;
+}
+
+HelvumSubNode {
+    background-color: @window_bg_color;
+    border: 1px solid @borders;
+    border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+}
+
+HelvumSubNode:hover {
+    border-color: @accent_color;
+}
+
+.sub-node-title {
+    background-color: alpha(@accent_color, 0.1);
+    border-bottom: 1px solid alpha(@borders, 0.3);
+    border-radius: 6px 6px 0 0;
+}

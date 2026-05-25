@@ -1,6 +1,12 @@
 using Gtk 4.0;
 using Adw 1;
 
+menu file_menu {
+  item ("_Save Preset...", "win.save-preset")
+  item ("_Load Preset...", "win.load-preset")
+  item ("_Toggle Matrix View", "win.toggle-view")
+}
+
 menu primary_menu {
   item ("_About Helvum", "app.about")
 }
@@ -13,6 +19,12 @@ template HelvumWindow : Adw.ApplicationWindow {
   Adw.ToolbarView {
     [top]
     Adw.HeaderBar header_bar {
+      [start]
+      Gtk.MenuButton {
+        label: _("File");
+        menu-model: file_menu;
+      }
+
       [end]
       Gtk.MenuButton {
         icon-name: "open-menu-symbolic";

@@ -30,7 +30,6 @@ use petgraph::stable_graph::StableGraph;
 use petgraph::visit::{Bfs, EdgeRef, IntoEdgeReferences, IntoNodeReferences, Reversed};
 use petgraph::Directed;
 use std::cell::RefCell;
-use std::cmp::Ordering;
 
 use super::{Link, Node, Port};
 use crate::NodeType;
@@ -878,6 +877,76 @@ impl GraphView {
         glib::Object::new()
     }
 
+    pub fn link_count(&self) -> usize {
+        self.imp().graph.borrow().edge_count()
+    }
+
+    pub fn fit_to_content(&self) {
+        let imp = self.imp();
+        let graph = imp.graph.borrow();
+        
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+        
+        let mut has_nodes = false;
+        
+        for nw in graph.node_weights() {
+            has_nodes = true;
+            let x = nw.position.x();
+            let y = nw.position.y();
+            let (_, nat) = nw.widget.preferred_size();
+            let w = nat.width() as f32;
+            let h = nat.height() as f32;
+            
+            if x < min_x { min_x = x; }
+            if y < min_y { min_y = y; }
+            if x + w > max_x { max_x = x + w; }
+            if y + h > max_y { max_y = y + h; }
+        }
+        
+        if !has_nodes {
+            return;
+        }
+        
+        let padding = 100.0;
+        min_x -= padding;
+        min_y -= padding;
+        max_x += padding;
+        max_y += padding;
+        
+        let content_w = (max_x - min_x) as f64;
+        let content_h = (max_y - min_y) as f64;
+        
+        let alloc_w = self.width() as f64;
+        let alloc_h = self.height() as f64;
+        
+        if alloc_w <= 0.0 || alloc_h <= 0.0 {
+            return;
+        }
+        
+        let zoom_x = alloc_w / content_w;
+        let zoom_y = alloc_h / content_h;
+        
+        let target_zoom = zoom_x.min(zoom_y).min(1.0).max(0.3);
+        
+        self.set_property("zoom-factor", target_zoom);
+        
+        let center_x = (min_x as f64 + max_x as f64) / 2.0;
+        let center_y = (min_y as f64 + max_y as f64) / 2.0;
+        
+        let hadj_val = center_x * target_zoom - alloc_w / 2.0;
+        let vadj_val = center_y * target_zoom - alloc_h / 2.0;
+        
+        if let Some(adj) = imp.hadjustment.borrow().as_ref() {
+            adj.set_value(hadj_val);
+        }
+        if let Some(adj) = imp.vadjustment.borrow().as_ref() {
+            adj.set_value(vadj_val);
+        }
+    }
+
     pub fn zoom_factor(&self) -> f64 {
         self.property("zoom-factor")
     }
@@ -930,14 +999,31 @@ impl GraphView {
             420.0
         };
 
-        let y = imp
-            .graph
-            .borrow()
-            .node_weights()
-            .filter(|nw| (x - nw.position.x()).abs() < 50.0)
-            .map(|nw| nw.position.y())
-            .max_by(|y1, y2| y1.partial_cmp(y2).unwrap_or(Ordering::Equal))
-            .map_or(20_f32, |y| y + 120.0);
+        let mut y = 20.0;
+        let mut found_spot = false;
+        
+        let margin = 40.0;
+        let (_, nat_size) = node.preferred_size();
+        let current_width = nat_size.width() as f32;
+        let current_height = (nat_size.height() as f32).max(150.0);
+
+        while !found_spot {
+            found_spot = true;
+            for nw in imp.graph.borrow().node_weights() {
+                let nw_x = nw.position.x();
+                let nw_y = nw.position.y();
+                let (_, nw_nat) = nw.widget.preferred_size();
+                let nw_width = nw_nat.width() as f32;
+                let nw_height = (nw_nat.height() as f32).max(150.0);
+
+                if x < nw_x + nw_width + margin && x + current_width + margin > nw_x &&
+                   y < nw_y + nw_height + margin && y + current_height + margin > nw_y {
+                    y = nw_y + nw_height + margin;
+                    found_spot = false;
+                    break;
+                }
+            }
+        }
 
         let mut graph = imp.graph.borrow_mut();
         let mut node_to_index = imp.node_to_index.borrow_mut();
@@ -961,7 +1047,8 @@ impl GraphView {
             let edge_indices: Vec<_> = graph.edges(index).map(|e| e.id()).collect();
             for edge_idx in edge_indices {
                 let link = graph.edge_weight(edge_idx).unwrap().clone();
-                link_to_index.remove(&link);
+                link_to_index.remove(link.upcast_ref::<glib::Object>());
+                link.unparent();
             }
 
             graph.remove_node(index);
@@ -995,14 +1082,18 @@ impl GraphView {
         let output_port = link.output_port().expect("Link should have an output port");
         let input_port = link.input_port().expect("Link should have an input port");
 
-        let output_node = output_port
+        let Some(output_node) = output_port
             .ancestor(Node::static_type())
-            .and_downcast::<Node>()
-            .unwrap();
-        let input_node = input_port
+            .and_downcast::<Node>() else {
+                log::warn!("Output port has no node ancestor");
+                return;
+            };
+        let Some(input_node) = input_port
             .ancestor(Node::static_type())
-            .and_downcast::<Node>()
-            .unwrap();
+            .and_downcast::<Node>() else {
+                log::warn!("Input port has no node ancestor");
+                return;
+            };
 
         let imp = self.imp();
         let mut graph = imp.graph.borrow_mut();
@@ -1019,7 +1110,9 @@ impl GraphView {
         };
 
         let edge_idx = graph.add_edge(output_idx, input_idx, link.clone());
-        link_to_index.insert(link, edge_idx);
+        link_to_index.insert(link.clone(), edge_idx);
+        
+        link.set_parent(self);
 
         self.queue_draw();
     }
@@ -1029,8 +1122,9 @@ impl GraphView {
         let mut graph = imp.graph.borrow_mut();
         let mut link_to_index = imp.link_to_index.borrow_mut();
 
-        if let Some(index) = link_to_index.remove(link) {
+        if let Some(index) = link_to_index.remove(link.upcast_ref::<glib::Object>()) {
             graph.remove_edge(index);
+            link.unparent();
         }
 
         self.queue_draw();
@@ -1044,6 +1138,9 @@ impl GraphView {
 
         for nw in graph.node_weights() {
             nw.widget.unparent();
+        }
+        for link in link_to_index.keys() {
+            link.unparent();
         }
 
         graph.clear();

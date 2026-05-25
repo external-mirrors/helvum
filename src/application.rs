@@ -40,7 +40,7 @@ mod imp {
     #[derive(Default)]
     pub struct Application {
         pub(super) window: ui::Window,
-        pub(super) graph_manager: OnceCell<GraphManager>,
+        pub graph_manager: OnceCell<GraphManager>,
     }
 
     #[glib::object_subclass]
@@ -58,6 +58,7 @@ mod imp {
             let graphview = self.window.graph();
 
             self.window.set_application(Some(app));
+            self.window.setup_actions();
 
             let zoom_set_action =
                 gio::SimpleAction::new("set-zoom", Some(&f64::static_variant_type()));
@@ -163,6 +164,7 @@ impl Application {
         imp.graph_manager
             .set(GraphManager::new(
                 &imp.window.graph(),
+                &imp.window.matrix_view(),
                 &imp.window.connection_banner(),
                 pw_sender,
                 gtk_receiver,

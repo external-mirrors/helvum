@@ -3,37 +3,88 @@ using Gtk 4.0;
 template HelvumNode : Widget {
   styles ["card"]
 
-  Gtk.Box {
-    orientation: vertical;
-
+  Gtk.Overlay {
     Gtk.Box {
-      styles ["node-title"]
       orientation: vertical;
-      spacing: 1;
 
-      Gtk.Label node_name {
-        styles ["heading"]
-        wrap: true;
-        ellipsize: end;
-        lines: 2;
-        max-width-chars: 20;
+      Gtk.Box {
+        styles ["node-title"]
+        orientation: vertical;
+        spacing: 1;
+
+        Gtk.Label node_name {
+          styles ["heading"]
+          wrap: true;
+          ellipsize: end;
+          lines: 2;
+          max-width-chars: 20;
+        }
+
+        Gtk.Label media_name {
+          styles ["dim-label", "caption"]
+          visible: false;
+          wrap: true;
+          ellipsize: end;
+          lines: 2;
+          max-width-chars: 20;
+        }
       }
 
-      Gtk.Label media_name {
-        styles ["dim-label", "caption"]
+      Gtk.Separator separator {
+        /* The node will show the seperator only once ports are added to it */
         visible: false;
-        wrap: true;
-        ellipsize: end;
-        lines: 2;
-        max-width-chars: 20;
+      }
+
+      Gtk.Box port_grid {
+        orientation: vertical;
+        spacing: 4;
+      }
+
+      Gtk.Fixed sub_canvas {
+        styles ["sub-canvas"]
+        visible: false;
+        hexpand: true;
+        vexpand: true;
       }
     }
 
-    Gtk.Separator separator {
-      /* The node will show the seperator only once ports are added to it */
-      visible: false;
-    }
+    [overlay]
+    Gtk.Box action_box {
+      styles ["node-actions"]
+      halign: end;
+      valign: start;
+      margin-top: 4;
+      margin-end: 4;
+      
+      Gtk.Button detach_button {
+        icon-name: "external-link-symbolic";
+        tooltip-text: _("Detach as separate node");
+        styles ["flat"]
+      }
 
-    Gtk.Grid port_grid {}
+      Gtk.Button reattach_button {
+        icon-name: "call-start-symbolic";
+        tooltip-text: _("Reattach to application group");
+        styles ["flat"]
+      }
+      
+      Gtk.Button pin_button {
+        icon-name: "pin-symbolic";
+        tooltip-text: _("Pin (don't delete when offline)");
+        styles ["flat"]
+      }
+
+      Gtk.ToggleButton auto_delete_button {
+        icon-name: "media-record-symbolic";
+        tooltip-text: _("Auto-delete when offline");
+        styles ["flat"]
+      }
+
+      Gtk.Button delete_button {
+        icon-name: "user-trash-symbolic";
+        tooltip-text: _("Delete offline node");
+        styles ["flat", "error"]
+      }
+    }
   }
 }

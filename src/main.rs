@@ -17,6 +17,7 @@
 mod application;
 mod graph_manager;
 mod pipewire_connection;
+mod preset_manager;
 mod ui;
 
 use adw::{gtk, prelude::*};
@@ -67,6 +68,7 @@ pub enum PipewireMessage {
         id: NodeId,
         name: String,
         internal_name: String,
+        app_name: String,
         node_type: Option<NodeType>,
     },
     NodeNameChanged {

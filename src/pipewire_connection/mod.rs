@@ -232,6 +232,11 @@ fn handle_node(
         .get(&pipewire::keys::NODE_NAME)
         .unwrap_or(&name)
         .to_string();
+    let app_name = props
+        .get(&pipewire::keys::APP_NAME)
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
     let media_class = |class: &str| {
         if class.contains("Sink") || class.contains("Input") {
             Some(NodeType::Input)
@@ -260,6 +265,7 @@ fn handle_node(
             id: NodeId(node.id),
             name,
             internal_name,
+            app_name,
             node_type,
         })
         .expect("Failed to send message");

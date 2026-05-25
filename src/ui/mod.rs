@@ -20,5 +20,8 @@
 
 pub mod graph;
 
+mod matrix_view;
+pub use matrix_view::*;
+
 mod window;
 pub use window::*;

@@ -22,10 +22,15 @@ use crate::{ui::graph::GraphView, GtkMessage, PipewireMessage};
 
 mod imp {
     use super::*;
+    use petgraph::visit::IntoEdgeReferences;
 
-    use std::{cell::OnceCell, cell::RefCell, collections::HashMap, collections::HashSet};
+    use std::{cell::Cell, cell::OnceCell, cell::RefCell, collections::HashMap, collections::HashSet};
 
-    use crate::{ui::graph, LinkId, MediaType, NodeId, NodeType, PortId};
+    use crate::{
+        ui::graph, GtkMessage, LinkId, MediaType, NodeId, NodeType,
+        PipewireMessage, PortId,
+        preset_manager,
+    };
 
     #[derive(Default, glib::Properties)]
     #[properties(wrapper_type = super::GraphManager)]
@@ -34,14 +39,48 @@ mod imp {
         pub graph: RefCell<Option<crate::ui::graph::GraphView>>,
 
         #[property(get, set, construct_only, nullable)]
+        pub matrix_view: RefCell<Option<crate::ui::MatrixView>>,
+
+        #[property(get, set, construct_only, nullable)]
         pub connection_banner: RefCell<Option<adw::Banner>>,
 
         pub pw_sender: OnceCell<PwSender<crate::GtkMessage>>,
         pub items: RefCell<HashMap<u32, glib::Object>>,
         /// Nodes that have been removed and are waiting to be revived.
         pub(super) offline_nodes: RefCell<HashMap<String, graph::Node>>,
+        pub(super) app_groups: RefCell<HashMap<String, graph::Node>>,
+        /// IDs that are currently detached and should not be grouped.
+        pub(super) detached_ids: RefCell<HashSet<u32>>,
+        pub(super) pending_links: RefCell<HashSet<preset_manager::ConnectionPreset>>,
         /// Links that were manually deleted by the user and should not be ghosted.
         pub(super) pending_deletions: RefCell<HashSet<String>>,
+
+        pub(super) master_links: RefCell<HashMap<String, graph::Link>>,
+        pub(super) real_to_master: RefCell<HashMap<u32, String>>,
+        pub(super) link_to_internal_node: RefCell<HashMap<u32, Vec<u32>>>,
+        pub(super) matrix_update_pending: Cell<bool>,
+    }
+
+    impl GraphManager {
+        pub(super) fn queue_matrix_update(&self) {
+            if !self.matrix_update_pending.get() {
+                self.matrix_update_pending.set(true);
+                glib::source::idle_add_local_once(glib::clone!(
+                    #[weak(rename_to = manager)]
+                    self,
+                    move || {
+                        manager.matrix_update_pending.set(false);
+                        if let Some(matrix) = manager.matrix_view.borrow().as_ref() {
+                            if matrix.is_mapped() {
+                                if let Some(sender) = manager.pw_sender.get() {
+                                    matrix.update_view(&manager.items.borrow(), &manager.master_links.borrow(), sender.clone());
+                                }
+                            }
+                        }
+                    }
+                ));
+            }
+        }
     }
 
     #[glib::object_subclass]
@@ -65,8 +104,9 @@ mod imp {
                             id,
                             name,
                             internal_name,
+                            app_name,
                             node_type,
-                        } => imp.add_node(id, name.as_str(), internal_name.as_str(), node_type),
+                        } => imp.add_node(id, name.as_str(), internal_name.as_str(), app_name.as_str(), node_type, false),
                         PipewireMessage::NodeNameChanged {
                             id,
                             name,
@@ -113,6 +153,7 @@ mod imp {
                             imp.clear();
                         }
                     }
+                    imp.queue_matrix_update();
                 }
             });
         }
@@ -122,34 +163,258 @@ mod imp {
         }
 
         /// Add a new node to the view.
-        fn add_node(&self, id: NodeId, name: &str, internal_name: &str, node_type: Option<NodeType>) {
-            let mut items = self.items.borrow_mut();
-            let mut offline_nodes = self.offline_nodes.borrow_mut();
+        fn add_node(&self, id: NodeId, name: &str, internal_name: &str, app_name: &str, node_type: Option<NodeType>, is_detached: bool) {
+            let is_detached = is_detached || self.detached_ids.borrow().contains(&id.0);
+            
+            let existing_node = {
+                let items = self.items.borrow_mut();
+                let offline_nodes = self.offline_nodes.borrow_mut();
+                let mut app_groups = self.app_groups.borrow_mut();
 
-            if let Some(old_item) = items.get(&id.0) {
-                if let Ok(old_node) = old_item.clone().dynamic_cast::<graph::Node>() {
+                let mut node_to_remove = None;
+                if let Some(old_item) = items.get(&id.0) {
+                    if let Ok(old_node) = old_item.clone().dynamic_cast::<graph::Node>() {
+                        old_node.remove_sub_node(id.0);
+                        if old_node.sub_node_count() == 0 {
+                            node_to_remove = Some(old_node);
+                        } else {
+                            let ports_to_move: Vec<_> = old_node.ports().into_iter().filter(|p| p.node_id() == id.0).collect();
+                            for port in ports_to_move {
+                                old_node.remove_port(&port);
+                            }
+                        }
+                    }
+                }
+
+                if let Some(old_node) = node_to_remove {
+                    app_groups.remove(&old_node.app_name());
+                    drop(items);
+                    drop(offline_nodes);
+                    drop(app_groups);
                     self.graph_view().remove_node(&old_node);
+                } else {
+                    drop(items);
+                    drop(offline_nodes);
+                    drop(app_groups);
+                }
+
+                let is_app = !app_name.is_empty();
+
+                if is_app && !is_detached {
+                    let mut app_groups = self.app_groups.borrow_mut();
+                    if let Some(group_node) = app_groups.get(app_name) {
+                        log::info!("Adding stream {} to existing group {}", name, app_name);
+                        group_node.add_sub_node(id.0, name);
+                        group_node.set_online(true);
+                        self.items.borrow_mut().insert(id.0, group_node.clone().upcast());
+                        self.graph_view().queue_draw();
+                        return;
+                    }
+                    
+                    let mut offline_nodes = self.offline_nodes.borrow_mut();
+                    if let Some(node) = offline_nodes.remove(app_name) {
+                        log::info!("Reviving application group: {}", app_name);
+                        node.set_online(true);
+                        node.add_sub_node(id.0, name);
+                        app_groups.insert(app_name.to_string(), node.clone());
+                        self.items.borrow_mut().insert(id.0, node.clone().upcast());
+
+                        let ports = node.ports();
+                        for port in ports {
+                            let port_name = port.name();
+                            let direction = libspa::utils::Direction::from(port.port_direction());
+                            let port_id = port.pw_id();
+                            self.check_and_create_master_port(&node, &port_name, direction, port_id);
+                        }
+
+                        self.graph_view().queue_draw();
+                        return;
+                    }
+                }
+                
+                let mut app_groups = self.app_groups.borrow_mut();
+                let mut items = self.items.borrow_mut();
+                
+                log::info!("Adding new node: {} ({}) for app {}", name, internal_name, app_name);
+                let display_name = if is_app && !is_detached { app_name } else { name };
+                let node = graph::Node::new(display_name, id);
+                node.set_media_name(internal_name.to_string());
+                node.set_app_name(app_name.to_string());
+                node.set_node_type(node_type);
+                node.add_sub_node(id.0, name);
+                node.set_online(true);
+                node.set_is_detached(is_detached);
+                node.set_is_app(!app_name.is_empty());
+
+                if is_app && !is_detached {
+                    app_groups.insert(app_name.to_string(), node.clone());
+                }
+                items.insert(id.0, node.clone().upcast());
+                Some(node)
+            };
+
+            if let Some(node) = existing_node {
+                let self_obj = self.obj().clone();
+                node.connect_local("detach", false, move |args| {
+                    let id = args[1].get::<u32>().unwrap();
+                    self_obj.imp().detach_node(id);
+                    None
+                });
+
+                let self_obj = self.obj().clone();
+                node.connect_local("reattach", false, move |args| {
+                    let id = args[1].get::<u32>().unwrap();
+                    self_obj.imp().reattach_node(id);
+                    None
+                });
+
+                let self_obj = self.obj().clone();
+                node.connect_local("delete", false, move |args| {
+                    let node = args[0].get::<graph::Node>().unwrap();
+                    self_obj.imp().delete_offline_node(&node);
+                    None
+                });
+
+                self.graph_view().add_node(node, node_type);
+                self.graph_view().queue_draw();
+            }
+        }
+
+        fn detach_node(&self, id: u32) {
+            log::info!("Detaching node {}", id);
+            
+            let mut detached_ids = self.detached_ids.borrow_mut();
+            detached_ids.insert(id);
+            
+            let items = self.items.borrow();
+            let Some(item) = items.get(&id) else { return };
+            let Ok(node) = item.clone().dynamic_cast::<graph::Node>() else { return };
+            
+            let name = node.sub_nodes().get(&id).cloned().unwrap_or_else(|| node.node_name());
+            let internal_name = node.media_name();
+            let app_name = node.app_name();
+            let node_type = node.node_type();
+            
+            drop(items);
+            drop(detached_ids);
+
+            self.add_node(NodeId(id), &name, &internal_name, &app_name, node_type, true);
+        }
+
+        fn reattach_node(&self, id: u32) {
+            log::info!("Reattaching node {}", id);
+            self.detached_ids.borrow_mut().remove(&id);
+            
+            let items = self.items.borrow();
+            let Some(item) = items.get(&id) else { return };
+            let Ok(node) = item.clone().dynamic_cast::<graph::Node>() else { return };
+            
+            let name = node.sub_nodes().get(&id).cloned().unwrap_or_else(|| node.node_name());
+            let internal_name = node.media_name();
+            let app_name = node.app_name();
+            let node_type = node.node_type();
+            
+            drop(items);
+            self.add_node(NodeId(id), &name, &internal_name, &app_name, node_type, false);
+        }
+
+        fn delete_offline_node(&self, node: &graph::Node) {
+            log::info!("Deleting offline node {}", node.app_name());
+            self.graph_view().remove_node(node);
+            self.offline_nodes.borrow_mut().remove(&node.app_name());
+        }
+
+        pub fn save_preset(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+            let mut preset = preset_manager::Preset::default();
+            let items = self.items.borrow();
+            let detached_ids = self.detached_ids.borrow();
+
+            for item in items.values() {
+                let Ok(link) = item.clone().dynamic_cast::<graph::Link>() else { continue };
+                
+                let Some(source_port) = link.imp().output_port.upgrade() else { continue };
+                let Some(sink_port) = link.imp().input_port.upgrade() else { continue };
+                
+                let source_node_id = source_port.node_id();
+                let sink_node_id = sink_port.node_id();
+                
+                if detached_ids.contains(&source_node_id) || detached_ids.contains(&sink_node_id) {
+                    continue;
+                }
+
+                let Some(source_node_item) = items.get(&source_node_id) else { continue };
+                let Some(sink_node_item) = items.get(&sink_node_id) else { continue };
+                
+                let Ok(source_node) = source_node_item.clone().dynamic_cast::<graph::Node>() else { continue };
+                let Ok(sink_node) = sink_node_item.clone().dynamic_cast::<graph::Node>() else { continue };
+
+                preset.connections.push(preset_manager::ConnectionPreset {
+                    source_app: source_node.app_name(),
+                    source_port: source_port.name(),
+                    sink_app: sink_node.app_name(),
+                    sink_port: sink_port.name(),
+                });
+            }
+
+            preset.save_to_file(path)
+        }
+
+        pub fn load_preset(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+            let preset = preset_manager::Preset::load_from_file(path)?;
+            
+            let mut pending = self.pending_links.borrow_mut();
+            for conn in preset.connections {
+                log::info!("Queuing preset link: {}/{} -> {}/{}", conn.source_app, conn.source_port, conn.sink_app, conn.sink_port);
+                pending.insert(conn);
+            }
+            
+            drop(pending);
+            self.check_pending_links();
+            
+            Ok(())
+        }
+
+        fn check_pending_links(&self) {
+            let pending = self.pending_links.borrow().clone();
+            let items = self.items.borrow();
+
+            for conn in pending {
+                let source_port = items.values().find_map(|item| {
+                    let port = item.clone().dynamic_cast::<graph::Port>().ok()?;
+                    if port.port_direction() == graph::PortDirection::Output && port.name() == conn.source_port {
+                        let node = items.get(&port.node_id())?.clone().dynamic_cast::<graph::Node>().ok()?;
+                        if node.app_name() == conn.source_app {
+                            return Some(port);
+                        }
+                    }
+                    None
+                });
+
+                let sink_port = items.values().find_map(|item| {
+                    let port = item.clone().dynamic_cast::<graph::Port>().ok()?;
+                    if port.port_direction() == graph::PortDirection::Input && port.name() == conn.sink_port {
+                        let node = items.get(&port.node_id())?.clone().dynamic_cast::<graph::Node>().ok()?;
+                        if node.app_name() == conn.sink_app {
+                            return Some(port);
+                        }
+                    }
+                    None
+                });
+
+                if let (Some(source), Some(sink)) = (source_port, sink_port) {
+                    log::info!("Applying preset link: {}/{} -> {}/{}", conn.source_app, conn.source_port, conn.sink_app, conn.sink_port);
+                    self.pw_sender.get().unwrap()
+                        .send(GtkMessage::EnsureLink {
+                            port_from: source.pw_id(),
+                            port_to: sink.pw_id(),
+                        })
+                        .expect("Failed to send message");
+                    
+                    self.pending_links.borrow_mut().remove(&conn);
                 }
             }
-
-            if let Some(node) = offline_nodes.remove(internal_name) {
-                log::info!("Reviving offline node: {} ({})", name, internal_name);
-                node.set_pipewire_id(id.0);
-                node.set_online(true);
-                items.insert(id.0, node.upcast());
-                self.graph_view().queue_draw();
-                return;
-            }
-
-            log::info!("Adding new node: {} ({})", name, internal_name);
-            let node = graph::Node::new(name, id);
-            node.set_internal_name(internal_name.to_string());
-            node.set_online(true);
-
-            self.graph_view().add_node(node.clone(), node_type);
-            items.insert(id.0, node.upcast());
-            self.graph_view().queue_draw();
         }
+
 
         /// Update a node tooltip to the view.
         fn node_name_changed(&self, id: NodeId, node_name: &str, media_name: &str) {
@@ -168,30 +433,70 @@ mod imp {
             };
 
             node.set_node_name(node_name);
-            node.set_media_name(media_name);
+            node.set_media_name(media_name.to_string());
         }
 
-        /// Remove the node with the specified id from the view.
+        /// Remove a node from the view.
         fn remove_node(&self, id: NodeId) {
-            log::info!("Removing node from graph: id {}", id.0);
+                let node_to_ghost: Option<graph::Node>;
 
-            let mut items = self.items.borrow_mut();
-            let mut offline_nodes = self.offline_nodes.borrow_mut();
+            {
+                let mut items = self.items.borrow_mut();
+                let mut offline_nodes = self.offline_nodes.borrow_mut();
+                let mut app_groups = self.app_groups.borrow_mut();
 
-            let Some(item) = items.remove(&id.0) else {
-                log::warn!("Unknown node (id={}) removed from graph", id.0);
-                return;
-            };
-            let Ok(node) = item.dynamic_cast::<graph::Node>() else {
-                log::warn!("Graph Manager item under node id {} is not a node", id.0);
-                return;
-            };
+                let Some(item) = items.remove(&id.0) else {
+                    log::warn!("Node (id: {}) for removal not found in graph manager", id.0);
+                    return;
+                };
 
-            node.set_online(false);
-            for port in node.ports() {
-                port.set_online(false);
+                let Ok(node) = item.clone().dynamic_cast::<graph::Node>() else {
+                    log::warn!("Graph Manager item under node id {} is not a node", id.0);
+                    return;
+                };
+
+                node.remove_sub_node(id.0);
+                
+                // Handle ports of the sub-node
+                let sub_node_ports: Vec<_> = node.ports().into_iter().filter(|p| p.node_id() == id.0).collect();
+                if node.auto_delete() {
+                    for p in sub_node_ports {
+                        node.remove_port(&p);
+                    }
+                } else {
+                    for p in sub_node_ports {
+                        p.set_online(false);
+                    }
+                }
+
+                if node.sub_node_count() == 0 {
+                    let app_name = node.app_name();
+                    if node.auto_delete() {
+                        log::info!("Application group {} fully offline and auto-delete enabled, removing", app_name);
+                        app_groups.remove(&app_name);
+                        drop(items);
+                        drop(offline_nodes);
+                        drop(app_groups);
+                        self.graph_view().remove_node(&node);
+                        return;
+                    }
+                    log::info!("Application group {} went fully offline, ghosting", app_name);
+                    app_groups.remove(&app_name);
+                    offline_nodes.insert(app_name, node.clone());
+                    node_to_ghost = Some(node);
+                } else {
+                    log::info!("Sub-node {} removed from group {}, group stays online", id.0, node.app_name());
+                    node_to_ghost = None;
+                }
             }
-            offline_nodes.insert(node.internal_name(), node);
+            
+            if let Some(node) = node_to_ghost {
+                node.set_online(false);
+                for port in node.ports() {
+                    port.set_online(false);
+                }
+            }
+
             self.graph_view().queue_draw();
         }
 
@@ -203,96 +508,92 @@ mod imp {
             node_id: NodeId,
             direction: libspa::utils::Direction,
         ) {
-            log::info!("Adding port to graph: id {}", id.0);
+            log::info!("Adding port to graph: id {}, node_id {}", id.0, node_id.0);
 
-            let mut items = self.items.borrow_mut();
+            let port = graph::Port::new(id, name, direction);
+            port.set_node_id(node_id.0);
 
-            if let Some(old_item) = items.get(&id.0) {
-                if let Ok(old_port) = old_item.clone().dynamic_cast::<graph::Port>() {
-                    if let Some(old_node_widget) = old_port.parent().and_downcast::<graph::Node>() {
-                        old_node_widget.remove_port(&old_port);
+            let mut port_added = false;
+            {
+                let mut items = self.items.borrow_mut();
+
+                if let Some(old_item) = items.get(&id.0) {
+                    if let Ok(old_port) = old_item.clone().dynamic_cast::<graph::Port>() {
+                        if let Some(node) = items.get(&old_port.node_id()) {
+                            if let Ok(node) = node.clone().dynamic_cast::<graph::Node>() {
+                                node.remove_port(&old_port);
+                            }
+                        }
+                    }
+                }
+
+                if let Some(node_item) = items.get(&node_id.0) {
+                    if let Ok(node) = node_item.clone().dynamic_cast::<graph::Node>() {
+                        node.add_port(port.clone());
+                        items.insert(id.0, port.clone().upcast());
+                        port_added = true;
+
+                        let self_obj = self.obj().clone();
+                        port.connect_local(
+                            "port-toggled",
+                            false,
+                            glib::clone!(
+                                #[weak(rename_to = app)]
+                                self_obj,
+                                #[upgrade_or_default]
+                                move |args| {
+                                    let port_from = PortId(args[1].get::<u32>().unwrap());
+                                    let port_to = PortId(args[2].get::<u32>().unwrap());
+
+                                    app.imp().toggle_link(port_from, port_to);
+
+                                    None
+                                }
+                            ),
+                        );
                     }
                 }
             }
 
-            let Some(node) = items.get(&node_id.0) else {
-                log::warn!(
-                    "Node (id: {}) for port (id: {}) not found in graph manager",
-                    node_id.0,
-                    id.0
-                );
-                return;
-            };
-            let Ok(node) = node.clone().dynamic_cast::<graph::Node>() else {
-                log::warn!(
-                    "Graph Manager item under node id {} is not a node",
-                    node_id.0
-                );
-                return;
-            };
+            if port_added {
+                let node = {
+                    let items = self.items.borrow();
+                    items.get(&node_id.0).and_then(|i| i.clone().dynamic_cast::<graph::Node>().ok())
+                };
+                if let Some(node) = node {
+                    self.check_and_create_master_port(&node, &name, direction, id);
+                }
 
-            let port = {
-                let ports = node.ports();
-                ports.into_iter().find(|p| p.name() == name)
-            };
-
-            if let Some(port) = port {
-                log::info!("Reviving offline port: {} on node {}", name, node_id.0);
-                port.set_pw_id(id);
-                port.set_online(true);
-                
-                self.restore_links_for_port(&port);
-                items.insert(id.0, port.upcast());
-                
-                self.graph_view().queue_draw();
-                return;
-            }
-
-            let port = graph::Port::new(id, name, direction);
-            port.set_online(true);
-
-            // Create or delete a link if the widget emits the "port-toggled" signal.
-            port.connect_local(
-                "port_toggled",
-                false,
-                glib::clone!(
-                    #[weak(rename_to = app)]
-                    self,
-                    #[upgrade_or_default]
-                    move |args| {
-                        // Args always look like this: &[widget, id_port_from, id_port_to]
-                        let port_from = PortId(args[1].get::<u32>().unwrap());
-                        let port_to = PortId(args[2].get::<u32>().unwrap());
-
-                        app.toggle_link(port_from, port_to);
-
-                        None
+                {
+                    let items = self.items.borrow();
+                    if let Some(port) = items.get(&id.0).and_then(|i| i.clone().dynamic_cast::<graph::Port>().ok()) {
+                        self.restore_links_for_port(&port);
                     }
-                ),
-            );
-
-            items.insert(id.0, port.clone().upcast());
-
-            node.add_port(port);
-            self.graph_view().queue_draw();
+                }
+                self.check_pending_links();
+                self.graph_view().queue_draw();
+            }
         }
 
         fn port_media_type_changed(&self, id: PortId, media_type: MediaType) {
-            let items = self.items.borrow();
-
-            let Some(port) = items.get(&id.0) else {
-                log::warn!(
-                    "Port (id: {}) for changed media type not found in graph manager",
-                    id.0
-                );
-                return;
-            };
-            let Some(port) = port.dynamic_cast_ref::<graph::Port>() else {
-                log::warn!("Graph Manager item under port id {} is not a port", id.0);
-                return;
+            let (port, master_id) = {
+                let items = self.items.borrow();
+                let port = items.get(&id.0).and_then(|p| p.clone().dynamic_cast::<graph::Port>().ok());
+                let master_id = self.get_master_port_id_with_items(&items, id);
+                (port, master_id)
             };
 
-            port.set_media_type(media_type)
+            if let Some(port) = port {
+                port.set_media_type(media_type);
+                
+                // Also update master port if it exists
+                if let Some(master_id) = master_id {
+                    let items = self.items.borrow();
+                    if let Some(master) = items.get(&master_id.0).and_then(|i| i.dynamic_cast_ref::<graph::Port>()) {
+                        master.set_media_type(media_type);
+                    }
+                }
+            }
         }
 
         /// Remove the port with the id `id` from the node with the id `node_id`
@@ -328,17 +629,71 @@ mod imp {
             active: bool,
             media_type: MediaType,
         ) {
-            log::info!("Adding link to graph: id {}", id.0);
+            log::info!("Adding link to graph: id {} ({} -> {})", id.0, output_port_id.0, input_port_id.0);
+
+            let out_node = self.get_node_for_port_id(output_port_id);
+            let in_node = self.get_node_for_port_id(input_port_id);
+            
+            if let (Some(out_n), Some(in_n)) = (out_node.clone(), in_node.clone()) {
+                if out_n == in_n && out_n.is_app() {
+                    log::info!("Detected internal link for node {}, routing to sub-canvas", out_n.pw_name());
+                    out_n.add_internal_link(id.0, output_port_id.0, input_port_id.0, active, media_type);
+                    self.link_to_internal_node.borrow_mut().insert(id.0, vec![out_n.pw_id().0]);
+                    return;
+                }
+            }
+
+            let master_out_id = self.get_master_port_id(output_port_id);
+            let master_in_id = self.get_master_port_id(input_port_id);
+            let effective_out_id = master_out_id.unwrap_or(output_port_id);
+            let effective_in_id = master_in_id.unwrap_or(input_port_id);
+
+            if effective_out_id != output_port_id || effective_in_id != input_port_id {
+                let key = format!("{}-{}", effective_out_id.0, effective_in_id.0);
+                self.real_to_master.borrow_mut().insert(id.0, key.clone());
+
+                let mut internal_nodes = Vec::new();
+                if let Some(out_n) = out_node {
+                    if out_n.is_app() {
+                        out_n.add_internal_link(id.0, output_port_id.0, effective_out_id.0, active, media_type);
+                        internal_nodes.push(out_n.pw_id().0);
+                    }
+                }
+                if let Some(in_n) = in_node {
+                    if in_n.is_app() {
+                        in_n.add_internal_link(id.0, effective_in_id.0, input_port_id.0, active, media_type);
+                        internal_nodes.push(in_n.pw_id().0);
+                    }
+                }
+                self.link_to_internal_node.borrow_mut().insert(id.0, internal_nodes);
+
+                if let Some(master_link) = self.master_links.borrow().get(&key) {
+                    master_link.set_active(true);
+                    return;
+                }
+
+                let items = self.items.borrow();
+                let m_out_port = items.get(&effective_out_id.0).unwrap().clone().downcast::<graph::Port>().unwrap();
+                let m_in_port = items.get(&effective_in_id.0).unwrap().clone().downcast::<graph::Port>().unwrap();
+
+                let master_link = graph::Link::new();
+                master_link.set_output_port(Some(&m_out_port));
+                master_link.set_input_port(Some(&m_in_port));
+                master_link.set_active(active);
+                master_link.set_online(true);
+                master_link.set_media_type(media_type);
+
+                self.master_links.borrow_mut().insert(key, master_link.clone());
+                self.graph_view().add_link(master_link);
+                self.graph_view().queue_draw();
+                return;
+            }
 
             let mut items = self.items.borrow_mut();
 
             if let Some(old_item) = items.get(&id.0) {
                 if let Ok(old_link) = old_item.clone().dynamic_cast::<graph::Link>() {
-                    self.graph
-                        .borrow()
-                        .as_ref()
-                        .expect("graph should be set")
-                        .remove_link(&old_link);
+                    self.graph_view().remove_link(&old_link);
                 }
             }
 
@@ -359,7 +714,7 @@ mod imp {
             };
             let Some(input_port) = items.get(&input_port_id.0) else {
                 log::warn!(
-                    "Output port (id: {}) for link (id: {}) not found in graph manager",
+                    "Input port (id: {}) for link (id: {}) not found in graph manager",
                     input_port_id.0,
                     id.0
                 );
@@ -413,41 +768,136 @@ mod imp {
                 if active { "active" } else { "inactive" }
             );
 
+            let node_ids_opt = self.link_to_internal_node.borrow().get(&id.0).cloned();
+            if let Some(node_ids) = node_ids_opt {
+                let items = self.items.borrow();
+                for node_id in node_ids {
+                    if let Some(node) = items.get(&node_id).and_then(|i| i.dynamic_cast_ref::<graph::Node>()) {
+                        node.update_internal_link_state(id.0, active);
+                    }
+                }
+                if self.real_to_master.borrow().get(&id.0).is_none() {
+                    return;
+                }
+            }
+
+            let key_opt = self.real_to_master.borrow().get(&id.0).cloned();
+            if let Some(key) = key_opt {
+                if let Some(master) = self.master_links.borrow().get(&key) {
+                    if active {
+                        master.set_active(true);
+                    } else {
+                        let real_to_master = self.real_to_master.borrow();
+                        let any_active = real_to_master.iter().filter(|(_, k)| **k == key).any(|(rid, _)| {
+                            if *rid == id.0 { return false; }
+                            self.items.borrow().get(rid)
+                                .and_then(|i| i.dynamic_cast_ref::<graph::Link>())
+                                .map(|l| l.active())
+                                .unwrap_or(false)
+                        });
+                        if !any_active {
+                            master.set_active(false);
+                        }
+                    }
+                }
+            }
             let items = self.items.borrow();
 
             let Some(link) = items.get(&id.0) else {
-                log::warn!("Link state changed on unknown link (id={})", id.0);
                 return;
             };
             let Some(link) = link.dynamic_cast_ref::<graph::Link>() else {
-                log::warn!("Graph Manager item under link id {} is not a link", id.0);
                 return;
             };
 
             link.set_active(active);
+            self.graph_view().queue_draw();
         }
 
         fn link_format_changed(&self, id: LinkId, media_type: libspa::param::format::MediaType) {
+            let node_ids_opt = self.link_to_internal_node.borrow().get(&id.0).cloned();
+            if let Some(node_ids) = node_ids_opt {
+                let items = self.items.borrow();
+                for node_id in node_ids {
+                    if let Some(node) = items.get(&node_id).and_then(|i| i.dynamic_cast_ref::<graph::Node>()) {
+                        node.update_internal_link_format(id.0, media_type);
+                    }
+                }
+                if self.real_to_master.borrow().get(&id.0).is_none() {
+                    return;
+                }
+            }
+
+            let key_opt = self.real_to_master.borrow().get(&id.0).cloned();
+            if let Some(key) = key_opt {
+                if let Some(master) = self.master_links.borrow().get(&key) {
+                    master.set_media_type(media_type);
+                }
+            }
+
             let items = self.items.borrow();
 
             let Some(link) = items.get(&id.0) else {
-                log::warn!(
-                    "Link (id: {}) for changed media type not found in graph manager",
-                    id.0
-                );
                 return;
             };
             let Some(link) = link.dynamic_cast_ref::<graph::Link>() else {
-                log::warn!("Graph Manager item under link id {} is not a link", id.0);
                 return;
             };
             link.set_media_type(media_type);
+            self.graph_view().queue_draw();
         }
 
         // Toggle a link between the two specified ports on the remote pipewire server.
         // If it's a ghost link, we remove it from the graph.
         // If it's an active link (or no link exists), we ask PipeWire to toggle it.
         fn toggle_link(&self, port_from: PortId, port_to: PortId) {
+            log::info!("Toggling link between {} and {}", port_from.0, port_to.0);
+            let mut is_proxy = false;
+            let mut proxy_port_id = PortId(0);
+            let mut other_port_id = PortId(0);
+            let mut proxy_is_from = false;
+
+            if port_from.0 >= 0xF0000000 {
+                is_proxy = true;
+                proxy_port_id = port_from;
+                other_port_id = port_to;
+                proxy_is_from = true;
+            } else if port_to.0 >= 0xF0000000 {
+                is_proxy = true;
+                proxy_port_id = port_to;
+                other_port_id = port_from;
+                proxy_is_from = false;
+            }
+
+            if is_proxy {
+                log::info!("Proxy port detected, replicating link to all sub-ports");
+                let items = self.items.borrow();
+                for item in items.values() {
+                    if let Ok(node) = item.clone().dynamic_cast::<graph::Node>() {
+                        if node.is_detached() { continue; }
+                        if let Some(master) = node.master_ports().into_iter().find(|p| p.pw_id() == proxy_port_id) {
+                            let port_name = master.name();
+                            let direction = master.port_direction();
+                            
+                            let ports = node.ports();
+                            for port in ports {
+                                if port.name() == port_name && port.port_direction() == direction {
+                                    let sub_from = if proxy_is_from { port.pw_id() } else { other_port_id };
+                                    let sub_to = if proxy_is_from { other_port_id } else { port.pw_id() };
+                                    self.toggle_link_internal(sub_from, sub_to);
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+                return;
+            }
+
+            self.toggle_link_internal(port_from, port_to);
+        }
+
+        fn toggle_link_internal(&self, port_from: PortId, port_to: PortId) {
             // If there's a ghost link between these ports, remove it from the graph instead of toggling PipeWire.
             let items = self.items.borrow();
             let port_from_widget = items.get(&port_from.0).and_then(|i| i.dynamic_cast_ref::<graph::Port>());
@@ -502,6 +952,30 @@ mod imp {
         // Remove the link with the specified id from the view.
         fn remove_link(&self, id: LinkId) {
             log::info!("Removing link from graph: id {}", id.0);
+
+            let node_ids_opt = self.link_to_internal_node.borrow_mut().remove(&id.0);
+            if let Some(node_ids) = node_ids_opt {
+                let items = self.items.borrow();
+                for node_id in node_ids {
+                    if let Some(node) = items.get(&node_id).and_then(|i| i.dynamic_cast_ref::<graph::Node>()) {
+                        node.remove_internal_link(id.0);
+                    }
+                }
+                if self.real_to_master.borrow().get(&id.0).is_none() {
+                    return;
+                }
+            }
+            let key_opt = self.real_to_master.borrow_mut().remove(&id.0);
+            if let Some(key) = key_opt {
+                let still_exists = self.real_to_master.borrow().values().any(|v| v == &key);
+                if !still_exists {
+                    if let Some(link) = self.master_links.borrow_mut().remove(&key) {
+                        log::info!("Removing last real link for master key {}, deleting master link widget", key);
+                        self.graph_view().remove_link(&link);
+                    }
+                }
+                return;
+            }
 
             let mut items = self.items.borrow_mut();
 
@@ -591,6 +1065,106 @@ mod imp {
             }
         }
 
+
+        fn check_and_create_master_port(&self, node: &graph::Node, name: &str, direction: libspa::utils::Direction, id: PortId) {
+            if !node.is_app() || node.is_detached() { return; }
+
+            let n = name.to_lowercase();
+            let is_common = n.contains("front") || n.contains("capture") || n.contains("playback") || 
+                            n.contains("monitor") || n.contains("input") || n.contains("output") ||
+                            n.contains("aux") || n.contains("fl") || n.contains("fr") || n.contains("rl") || n.contains("rr") ||
+                            n.contains("fc") || n.contains("lfe") || n.contains("sl") || n.contains("sr") ||
+                            ["l", "r"].contains(&n.as_str());
+
+            if is_common {
+                if !node.has_master_port(name) {
+                    log::info!("Creating master port proxy for {}", name);
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    node.app_name().hash(&mut hasher);
+                    name.hash(&mut hasher);
+                    let hash = hasher.finish() as u32;
+                    let proxy_port_id = PortId(0xF0000000 | (hash & 0x0FFFFFFF));
+                    
+                    let proxy = graph::Port::new(proxy_port_id, name, direction);
+                    
+                    let items = self.items.borrow();
+                    if let Some(real_port) = items.get(&id.0).and_then(|p| p.dynamic_cast_ref::<graph::Port>()) {
+                        proxy.set_media_type(real_port.media_type().into());
+                    }
+                    drop(items);
+
+                    proxy.set_node_id(node.sub_nodes().keys().next().cloned().unwrap_or(0));
+                    
+                    node.add_master_port(proxy.clone());
+                    self.items.borrow_mut().insert(proxy_port_id.0, proxy.clone().upcast());
+                    
+                    let self_obj = self.obj().clone();
+                    proxy.connect_local(
+                        "port-toggled",
+                        false,
+                        glib::clone!(
+                            #[weak(rename_to = app)]
+                            self_obj,
+                            #[upgrade_or_default]
+                            move |args| {
+                                let port_from = PortId(args[1].get::<u32>().unwrap());
+                                let port_to = PortId(args[2].get::<u32>().unwrap());
+                                app.imp().toggle_link(port_from, port_to);
+                                None
+                            }
+                        ),
+                    );
+                }
+                
+                if let Some(master) = node.master_ports().into_iter().find(|p| p.name() == name) {
+                    let graph_view = self.graph_view();
+                    let graph = graph_view.graph().borrow();
+                    let master_links: Vec<_> = graph.edge_references().filter(|e| {
+                        let l = e.weight();
+                        l.output_port().as_ref() == Some(&master) || l.input_port().as_ref() == Some(&master)
+                    }).map(|e| e.weight().clone()).collect();
+
+                    for link in master_links {
+                        let other_port = if link.output_port().as_ref() == Some(&master) {
+                            link.input_port().clone()
+                        } else {
+                            link.output_port().clone()
+                        };
+                        if let Some(other) = other_port {
+                            let from = if direction == libspa::utils::Direction::Output { id } else { other.pw_id() };
+                            let to = if direction == libspa::utils::Direction::Output { other.pw_id() } else { id };
+                            self.request_link_ensure(from, to);
+                        }
+                    }
+                }
+            }
+        }
+
+        fn get_master_port_id_with_items(&self, items: &std::collections::HashMap<u32, glib::Object>, port_id: PortId) -> Option<PortId> {
+            let port = items.get(&port_id.0).and_then(|i| i.dynamic_cast_ref::<graph::Port>())?;
+            let node_item = items.get(&port.node_id())?;
+            let node = node_item.dynamic_cast_ref::<graph::Node>()?;
+            
+            if !node.is_app() || node.is_detached() { return None; }
+            
+            let name = port.name();
+            let direction = port.port_direction();
+            
+            node.master_ports().into_iter().find(|p| p.name() == name && p.port_direction() == direction).map(|p| p.pw_id())
+        }
+
+        fn get_master_port_id(&self, port_id: PortId) -> Option<PortId> {
+            let items = self.items.borrow();
+            self.get_master_port_id_with_items(&items, port_id)
+        }
+
+        fn get_node_for_port_id(&self, port_id: PortId) -> Option<graph::Node> {
+            let items = self.items.borrow();
+            let port = items.get(&port_id.0).and_then(|i| i.dynamic_cast_ref::<graph::Port>())?;
+            items.get(&port.node_id()).and_then(|i| i.clone().dynamic_cast::<graph::Node>().ok())
+        }
+
         fn clear(&self) {
             self.items.borrow_mut().clear();
             self.offline_nodes.borrow_mut().clear();
@@ -607,12 +1181,14 @@ glib::wrapper! {
 impl GraphManager {
     pub fn new(
         graph: &GraphView,
+        matrix_view: &crate::ui::MatrixView,
         connection_banner: &adw::Banner,
         sender: PwSender<GtkMessage>,
         receiver: async_channel::Receiver<PipewireMessage>,
     ) -> Self {
         let res: Self = glib::Object::builder()
             .property("graph", graph)
+            .property("matrix-view", matrix_view)
             .property("connection-banner", connection_banner)
             .build();
 
@@ -623,5 +1199,22 @@ impl GraphManager {
         );
 
         res
+    }
+
+    pub fn save_preset(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.imp().save_preset(path)
+    }
+
+    pub fn load_preset(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.imp().load_preset(path)
+    }
+
+    pub fn force_matrix_update(&self) {
+        let imp = self.imp();
+        if let Some(matrix) = imp.matrix_view.borrow().as_ref() {
+            if let Some(sender) = imp.pw_sender.get() {
+                matrix.update_view(&imp.items.borrow(), &imp.master_links.borrow(), sender.clone());
+            }
+        }
     }
 }

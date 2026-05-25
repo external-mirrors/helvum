@@ -100,6 +100,7 @@ mod imp {
     #[template(resource = "/org/pipewire/Helvum/graph/port.ui")]
     pub struct Port {
         pub(super) pipewire_id: Cell<u32>,
+        pub(super) node_id: Cell<u32>,
         pub(super) online: Cell<bool>,
         pub(super) media_type: Cell<PortMediaType>,
         pub(super) direction: Cell<PortDirection>,
@@ -113,6 +114,7 @@ mod imp {
         fn default() -> Self {
             Self {
                 pipewire_id: Cell::new(0),
+                node_id: Cell::new(0),
                 online: Cell::new(true),
                 media_type: Cell::new(PortMediaType::Unknown),
                 direction: Cell::new(PortDirection::Output),
@@ -183,6 +185,9 @@ mod imp {
                         .build(),
                     glib::ParamSpecEnum::builder::<PortMediaType>("media-type").build(),
                     glib::ParamSpecString::builder("name").build(),
+                    glib::ParamSpecBoolean::builder("show-handle")
+                        .default_value(true)
+                        .build(),
                 ]
             });
             PROPERTIES.as_ref()
@@ -211,6 +216,9 @@ mod imp {
                     self.label.set_text(&val);
                     self.label.set_tooltip_text(Some(&val));
                 }
+                "show-handle" => {
+                    self.handle.set_visible(value.get().expect("Value should be a bool"));
+                }
                 _ => unimplemented!(),
             }
         }
@@ -222,6 +230,7 @@ mod imp {
                 "online" => self.online.get().to_value(),
                 "media-type" => self.media_type.get().to_value(),
                 "name" => self.label.text().to_string().to_value(),
+                "show-handle" => self.handle.is_visible().to_value(),
                 _ => unimplemented!(),
             }
         }
@@ -465,11 +474,19 @@ impl Port {
     }
 
     pub fn pw_id(&self) -> PortId {
-        PortId(self.property("pipewire-id"))
+        PortId(self.imp().pipewire_id.get())
     }
 
     pub fn set_pw_id(&self, id: PortId) {
-        self.set_property("pipewire-id", id.0);
+        self.imp().pipewire_id.set(id.0);
+    }
+
+    pub fn node_id(&self) -> u32 {
+        self.imp().node_id.get()
+    }
+
+    pub fn set_node_id(&self, id: u32) {
+        self.imp().node_id.set(id);
     }
 
     pub fn online(&self) -> bool {
@@ -492,5 +509,9 @@ impl Port {
 
     pub fn is_linkable_to(&self, other_port: &Self) -> bool {
         self.port_direction() != other_port.port_direction()
+    }
+
+    pub fn set_show_handle(&self, show: bool) {
+        self.set_property("show-handle", show);
     }
 }

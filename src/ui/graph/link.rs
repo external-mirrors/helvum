@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
-use adw::{glib, prelude::*, subclass::prelude::*};
+use adw::{glib, gtk, prelude::*, subclass::prelude::*};
 use libspa::param::format::MediaType;
 
 use super::{Port, PortMediaType};
@@ -52,7 +52,7 @@ mod imp {
     impl ObjectSubclass for Link {
         const NAME: &'static str = "HelvumLink";
         type Type = super::Link;
-        type ParentType = glib::Object;
+        type ParentType = gtk::Widget;
     }
 
     impl ObjectImpl for Link {
@@ -98,11 +98,26 @@ mod imp {
             }
         }
 
+        fn constructed(&self) {
+            self.parent_constructed();
+            let obj = self.obj();
+            obj.update_property(&[gtk::accessible::Property::Label("Link")]);
+        }
+
         fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
             match pspec.name() {
-                "output-port" => self.output_port.set(value.get().unwrap()),
-                "input-port" => self.input_port.set(value.get().unwrap()),
-                "active" => self.active.set(value.get().unwrap()),
+                "output-port" => {
+                    self.output_port.set(value.get().unwrap());
+                    self.update_accessible_label();
+                }
+                "input-port" => {
+                    self.input_port.set(value.get().unwrap());
+                    self.update_accessible_label();
+                }
+                "active" => {
+                    self.active.set(value.get().unwrap());
+                    self.update_accessible_label();
+                }
                 "online" => self.online.set(value.get().unwrap()),
                 "pending-check" => self.pending_check.set(value.get().unwrap()),
                 "media-type" => self
@@ -112,10 +127,24 @@ mod imp {
             }
         }
     }
+    
+    impl Link {
+        fn update_accessible_label(&self) {
+            let out_name = self.output_port.upgrade().map(|p| p.name()).unwrap_or_default();
+            let in_name = self.input_port.upgrade().map(|p| p.name()).unwrap_or_default();
+            let status = if self.active.get() { "Active" } else { "Inactive" };
+            let label = format!("{} link from {} to {}", status, out_name, in_name);
+            self.obj().update_property(&[gtk::accessible::Property::Label(&label)]);
+        }
+    }
+
+    impl WidgetImpl for Link {}
 }
 
 glib::wrapper! {
-    pub struct Link(ObjectSubclass<imp::Link>);
+    pub struct Link(ObjectSubclass<imp::Link>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 impl Link {
