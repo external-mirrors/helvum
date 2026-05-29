@@ -14,8 +14,8 @@ categories = ["gui", "multimedia"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-pipewire  = "0.9.2"
-libspa    = "0.9.2"
+pipewire  = "0.10.0"
+libspa    = "0.10.0"
 async-channel = "2.5.0"
 adw = { version = "0.9.1", package = "libadwaita", features = ["v1_7", "gtk_v4_18"] }
 glib = { version = "0.22.7", features = ["log", "v2_84"] }
